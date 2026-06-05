@@ -1,0 +1,3267 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>PhotoDoc Pro</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+    <style>
+        /* ══ RESET ══════════════════════════════════════ */
+        :root {
+            --accent:       #2563eb;
+            --green:        #10b981;
+            --text-main:    #1f2937;
+            --text-muted:   #6b7280;
+            --border:       #e5e7eb;
+            --glass:        rgba(255,255,255,.50);
+            --glass-border: rgba(255,255,255,.70);
+            --panel-glass:  rgba(255,255,255,.25);
+            --panel-blur:   blur(25px) saturate(200%);
+            --panel-border: 1px solid rgba(255,255,255,.4);
+            --m-accent:     #111827;
+            --m-bg:         linear-gradient(135deg,#f3f4f6 0%,#e5e7eb 50%,#d1d5db 100%);
+        }
+        *, *::before, *::after { box-sizing: border-box; }
+        body {
+            margin: 0;
+            -webkit-touch-callout: none;
+        }
+        input, select, textarea { font-family: inherit; }
+
+        /* Заборона виділення тексту на десктопі */
+        #desktop {
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        #desktop input,
+        #desktop select,
+        #desktop textarea {
+            -webkit-user-select: text;
+            user-select: text;
+        }
+
+        /* ══ SHARED A4 PAGE ══════════════════════════════
+           Відповідає точно PDF-зразку:
+           • заголовок зверху по центру
+           • 2 фото рівномірно на сторінці
+           • підпис під кожним фото по центру
+           • номер сторінки внизу праворуч
+        ════════════════════════════════════════════════ */
+        .a4-page {
+            width: 210mm;
+            height: 297mm;
+            background: white;
+            padding: 15mm 15mm 15mm 20mm;
+            font-family: "Times New Roman", serif;
+            color: #000;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+
+        /* Заголовок — точно як у PDF */
+        .a4-header {
+            text-align: center;
+            margin-bottom: 8mm;
+            flex-shrink: 0;
+        }
+        .a4-header-title {
+            font-size: 16pt;
+            font-weight: bold;
+            font-family: "Times New Roman", serif;
+            display: block;
+            margin-bottom: 2mm;
+        }
+        .a4-header-sub {
+            font-size: 12pt;
+            font-family: "Times New Roman", serif;
+            margin: 0 0 2mm 0;
+        }
+        .a4-header-addr {
+            font-size: 11pt;
+            font-family: "Times New Roman", serif;
+            margin: 0;
+            white-space: pre-wrap;
+        }
+
+        /* Область фотографій */
+        .a4-photos-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-evenly;
+            min-height: 0;
+            overflow: hidden;
+            gap: 2mm;
+        }
+        /* Контейнер одного фото + підпису */
+        .a4-photo-block {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            min-height: 0;
+            flex: 1 1 0;
+            overflow: hidden;
+        }
+        /* Відступ між підписом першого фото і другим керується через gap в photos-area */
+        .a4-photo-block + .a4-photo-block {
+            margin-top: 0;
+        }
+
+        /* Обгортка фото — фіксована висота */
+        .a4-photo-wrap {
+            width: 100%;
+            flex: 1 1 0;
+            min-height: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Якщо одне фото на сторінці — займає ~половину аркуша, гарантовано видиме */
+        /* Якщо одне фото на сторінці — займає близько половини аркуша, гарантовано видиме */
+        .a4-photos-area.single {
+            justify-content: flex-start;
+            align-items: center;
+            flex: 1;
+            gap: 0;
+        }
+        .a4-photos-area.single .a4-photo-block {
+            flex: 0 0 auto;
+            width: 100%;
+            max-height: 60%;
+            height: auto;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        .a4-photos-area.single .a4-photo-wrap {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .a4-photos-area.single .a4-photo-img {
+            max-height: 100%;
+            max-width: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            display: block;
+        }
+
+        /* Саме фото */
+        .a4-photo-img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            display: block;
+            flex-shrink: 0;
+        }
+
+        /* Повернуте фото (90° або 270°):
+           Після повороту оригінальна висота стає шириною.
+           Обмежуємо через контейнер: ширина після повороту = висота wrap (108mm),
+           висота після повороту = ширина wrap (175mm).
+           Задаємо max-width через height контейнера і max-height через ширину. */
+        .a4-photo-img.rotated-90 {
+            max-width: none;
+            max-height: none;
+            /* Розміри задаються inline через JS */
+        }
+
+        /* Підпис — точно як у PDF */
+        .a4-photo-caption {
+            font-size: 12pt;
+            font-family: "Times New Roman", serif;
+            text-align: center;
+            margin: 2mm 0 0 0;
+            white-space: pre-wrap;
+            line-height: 1.3;
+            flex-shrink: 0;
+        }
+
+        .a4-photos-area.no-header {
+            flex: 1;
+        }
+
+        /* ══ TOGGLE SWITCH ══════════════════════════════ */
+        .tog-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            border-radius: 14px;
+            background: rgba(255,255,255,.45);
+            border: 1px solid rgba(255,255,255,.65);
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .tog-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+        .tog-switch {
+            width: 40px;
+            height: 24px;
+            border-radius: 12px;
+            background: #d1d5db;
+            position: relative;
+            transition: background .25s;
+            flex-shrink: 0;
+        }
+        .tog-switch::after {
+            content: '';
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #fff;
+            top: 3px;
+            left: 3px;
+            transition: transform .25s, box-shadow .25s;
+            box-shadow: 0 1px 3px rgba(0,0,0,.25);
+        }
+        .tog-wrap.active .tog-switch { background: var(--accent); }
+        .tog-wrap.active .tog-switch::after { transform: translateX(16px); }
+
+        /* ══ SEGMENTED CONTROL ══════════════════════════ */
+        .seg-ctrl {
+            display: flex;
+            background: rgba(0,0,0,.07);
+            border-radius: 11px;
+            padding: 3px;
+            gap: 2px;
+        }
+        .seg-btn {
+            flex: 1;
+            text-align: center;
+            padding: 6px 8px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background .2s, color .2s, box-shadow .2s;
+            white-space: nowrap;
+        }
+        .seg-btn.active {
+            background: #fff;
+            color: var(--text-main);
+            box-shadow: 0 1px 4px rgba(0,0,0,.15);
+        }
+
+        /* ══ SIGN EXTRA PANEL ═══════════════════════════ */
+        .sign-extra {
+            margin-top: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            animation: fadeSlide .2s ease;
+        }
+        @keyframes fadeSlide {
+            from { opacity: 0; transform: translateY(-6px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .a4-page-num {
+            text-align: right;
+            font-size: 10pt;
+            font-family: "Times New Roman", serif;
+            margin-top: 4mm;
+            flex-shrink: 0;
+        }
+
+        /* Рядок підпису внизу сторінки */
+        .a4-signature-row {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            font-size: 11pt;
+            font-family: "Times New Roman", serif;
+            margin-top: 0.5mm;
+            flex-shrink: 0;
+        }
+        .a4-page.signature-spacing-normal .a4-signature-row {
+            margin-top: 6mm;
+        }
+        .a4-page.signature-spacing-large .a4-signature-row {
+            margin-top: 12mm;
+        }
+        .a4-sign-left {
+            text-align: left;
+            white-space: nowrap;
+            flex: 1;
+        }
+        .a4-sign-center {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-end;
+        }
+        .a4-sign-line {
+            width: 35mm;
+            border-bottom: 1px solid #000;
+        }
+        .a4-sign-right {
+            text-align: right;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 1mm;
+            white-space: nowrap;
+        }
+
+        /* ══ DESKTOP (>= 768px) ══════════════════════════ */
+        #desktop {
+            display: none;
+            height: 100vh;
+            overflow: hidden;
+            background: var(--m-bg);
+            background-attachment: fixed;
+            color: var(--text-main);
+            font-family: -apple-system, system-ui, sans-serif;
+        }
+        .d-wrap  { display: flex; height: 100vh; overflow: hidden; }
+
+        .d-side  {
+            width: 420px;
+            background: rgba(255,255,255,.35);
+            backdrop-filter: blur(25px) saturate(200%);
+            -webkit-backdrop-filter: blur(25px) saturate(200%);
+            border-right: 1px solid rgba(255,255,255,.5);
+            display: flex;
+            flex-direction: column;
+            z-index: 10;
+        }
+        .d-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid rgba(255,255,255,.4);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+        }
+        .d-content { flex: 1; overflow-y: auto; padding: 20px; }
+
+        .d-preview {
+            flex: 1;
+            background: rgba(55,65,81,.6);
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        .d-preview .a4-page {
+            margin-bottom: 30px;
+            box-shadow: 0 10px 25px rgba(0,0,0,.3);
+            flex-shrink: 0;
+        }
+
+        .d-group { margin-bottom: 15px; }
+        .d-lbl   {
+            font-size: 9px;
+            font-weight: 800;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            margin-bottom: 5px;
+            display: block;
+            padding-left: 4px;
+        }
+        .d-group input, .d-group select, .d-group textarea {
+            width: 100%;
+            padding: 11px 14px;
+            border: 1px solid rgba(255,255,255,.6);
+            border-radius: 14px;
+            font-size: 14px;
+            background: rgba(255,255,255,.5);
+            color: var(--text-main);
+            outline: none;
+        }
+        .d-group textarea { resize: vertical; min-height: 50px; }
+
+        .d-card     {
+            background: rgba(255,255,255,.4);
+            border: 1px solid rgba(255,255,255,.6);
+            border-radius: 18px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .d-card-hdr {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .d-card-title {
+            background: transparent;
+            border: none;
+            font-weight: 700;
+            width: 80%;
+            font-size: 14px;
+            border-bottom: 1px solid rgba(0,0,0,.1);
+            outline: none;
+            color: var(--text-main);
+            resize: none;
+            overflow: hidden;
+            line-height: 1.4;
+            padding: 0;
+            font-family: inherit;
+        }
+        .d-photo-grid {
+            display: grid;
+            grid-template-columns: repeat(4,1fr);
+            gap: 6px;
+            margin-top: 10px;
+        }
+        .d-photo-item {
+            aspect-ratio: 1;
+            border-radius: 10px;
+            position: relative;
+            overflow: hidden;
+            background: rgba(0,0,0,.07);
+            border: 1px solid rgba(255,255,255,.5);
+            cursor: pointer;
+            transition: transform .25s ease, filter .25s ease, opacity .25s ease;
+        }
+        .d-photo-item img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+        .d-photo-grid.has-active .d-photo-item:not(.active) {
+            transform: scale(0.88);
+            filter: blur(2px) brightness(0.7);
+            opacity: 0.6;
+        }
+        .d-photo-grid.has-active .d-photo-item.active {
+            transform: scale(1.08);
+            z-index: 5;
+            filter: none !important;
+            opacity: 1 !important;
+        }
+        .d-add-photo {
+            border: 1px dashed rgba(107,114,128,.5);
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            transition: background .2s, border-color .2s, color .2s;
+        }
+        .d-add-photo.drag-over {
+            background: rgba(37,99,235,.10);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .btn-blue  {
+            background: var(--m-accent);
+            color: #fff;
+            border: none;
+            padding: 9px 18px;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .btn-green {
+            background: rgba(255,255,255,.3);
+            color: var(--text-main);
+            border: 1px solid rgba(255,255,255,.5);
+            padding: 9px 18px;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        .d-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,.35);
+            backdrop-filter: blur(6px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+        }
+        .d-modal-box {
+            background: rgba(255,255,255,.6);
+            backdrop-filter: blur(25px) saturate(200%);
+            -webkit-backdrop-filter: blur(25px) saturate(200%);
+            border: 1px solid rgba(255,255,255,.7);
+            padding: 25px;
+            border-radius: 20px;
+            width: 350px;
+        }
+        .d-modal-box input {
+            width: 100%;
+            padding: 11px 14px;
+            border: 1px solid rgba(255,255,255,.6);
+            border-radius: 14px;
+            font-size: 14px;
+            background: rgba(255,255,255,.5);
+            margin-bottom: 15px;
+            outline: none;
+        }
+
+        /* ══ MOBILE (< 768px) ═══════════════════════════ */
+        #mobile {
+            display: none;
+            height: 100vh;
+            overflow: hidden;
+            background: var(--m-bg);
+            background-attachment: fixed;
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            flex-direction: column;
+        }
+        #mobile * {
+            -webkit-tap-highlight-color: transparent;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        #mobile input,
+        #mobile select,
+        #mobile textarea {
+            -webkit-user-select: text;
+            user-select: text;
+        }
+
+        .m-spacer { height: env(safe-area-inset-top, 16px); min-height: 16px; flex-shrink: 0; }
+
+        .m-slider {
+            flex: 1;
+            display: flex;
+            width: 200%;
+            will-change: transform;
+            transform: translateX(0);
+        }
+        .m-slide {
+            width: 50%;
+            height: 100vh;
+            overflow-y: auto;
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
+            display: flex;
+            flex-direction: column;
+            padding: 0 16px 140px 16px;
+        }
+        .m-inner { max-width: 500px; margin: 0 auto; width: 100%; }
+
+        .m-group { margin-bottom: 14px; }
+        .m-lbl   {
+            font-size: 9px;
+            font-weight: 800;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            margin-bottom: 5px;
+            display: block;
+            padding-left: 8px;
+        }
+        .m-group input, .m-group select, .m-group textarea {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            font-size: 16px;
+            background: var(--glass);
+            color: var(--text-main);
+            outline: none;
+            resize: none;
+        }
+
+        .m-card {
+            border-radius: 20px;
+            padding: 16px;
+            margin-bottom: 16px;
+            background: rgba(255,255,255,.4);
+            border: 1px solid var(--glass-border);
+        }
+        .m-card-hdr {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+            gap: 10px;
+        }
+        .m-card-title {
+            background: transparent;
+            border: none;
+            font-weight: 700;
+            width: 70%;
+            color: var(--text-main);
+            outline: none;
+            font-size: 15px;
+            padding: 4px 0;
+            border-radius: 0;
+            min-height: 24px;
+            border-bottom: 1px solid rgba(0,0,0,.05);
+            resize: none;
+        }
+
+        .m-photo-grid {
+            display: grid;
+            grid-template-columns: repeat(3,1fr);
+            gap: 8px;
+            margin-top: 12px;
+            min-height: 10px;
+        }
+        .m-photo-item {
+            aspect-ratio: 1;
+            border-radius: 18px;
+            position: relative;
+            overflow: hidden;
+            background: rgba(0,0,0,.05);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            touch-action: pan-y;
+            cursor: pointer;
+            transition: transform .25s ease, filter .25s ease, opacity .25s ease;
+        }
+        .m-photo-item.sortable-ghost { opacity: .35; transform: scale(.93); }
+        .m-photo-item img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+        .m-del {
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            background: #fff;
+            border: none;
+            color: #ef4444;
+            border-radius: 50%;
+            width: 22px;
+            height: 22px;
+            font-size: 14px;
+            z-index: 2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .m-photo-grid.has-active .m-photo-item:not(.active) {
+            transform: scale(0.85);
+            filter: blur(2px) brightness(0.65);
+            opacity: 0.55;
+        }
+        .m-photo-grid.has-active .m-photo-item.active {
+            transform: scale(1.1);
+            z-index: 5;
+            filter: none !important;
+            opacity: 1 !important;
+        }
+        .m-add-btn {
+            border: 1px dashed var(--text-muted);
+            border-radius: 15px;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 12px;
+            transition: background .2s, border-color .2s, color .2s;
+        }
+        .m-add-btn.loading {
+            pointer-events: none;
+            border-color: var(--accent);
+            color: var(--accent);
+            gap: 8px;
+        }
+
+        /* ── Прогрес-бар завантаження ── */
+        .m-load-bar-wrap {
+            width: 100%;
+            height: 4px;
+            background: rgba(37,99,235,.15);
+            border-radius: 2px;
+            margin-top: 10px;
+            overflow: hidden;
+            display: none;
+        }
+        .m-load-bar {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 2px;
+            transition: width .2s ease;
+            width: 0%;
+        }
+        .m-load-count {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent);
+            text-align: center;
+            margin-top: 4px;
+            display: none;
+        }
+
+        /* Спінер */
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .m-spinner {
+            width: 14px; height: 14px;
+            border: 2px solid rgba(37,99,235,.25);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin .7s linear infinite;
+            flex-shrink: 0;
+        }
+
+        /* Desktop прогрес */
+        .d-load-bar-wrap {
+            width: 100%;
+            height: 3px;
+            background: rgba(37,99,235,.15);
+            border-radius: 2px;
+            margin-top: 6px;
+            overflow: hidden;
+            display: none;
+        }
+        .d-load-bar {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 2px;
+            transition: width .2s ease;
+            width: 0%;
+        }
+        .d-load-count {
+            font-size: 11px;
+            color: var(--accent);
+            font-weight: 700;
+            margin-top: 3px;
+            display: none;
+        }
+
+        #m-preview-slide {
+            background: #374151;
+            padding: 16px 16px 0 16px !important;
+            align-items: flex-start;
+            /* Слайд займає весь екран мінус навбар — скролиться всередині */
+            height: calc(100vh - 88px) !important;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+        }
+        .m-a4-wrap {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            transform-origin: top center;
+        }
+        #m-preview-slide .a4-page {
+            box-shadow: 0 15px 50px rgba(0,0,0,.4);
+            margin: 0 auto 20px;
+            flex-shrink: 0;
+        }
+
+        .m-nav {
+            position: fixed;
+            bottom: 24px;
+            left: 24px;
+            right: 24px;
+            height: 64px;
+            border-radius: 32px;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            z-index: 100;
+            background: var(--panel-glass);
+            backdrop-filter: var(--panel-blur);
+            border: var(--panel-border);
+        }
+        .m-nav-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: #94a3b8;
+            font-size: 10px;
+            gap: 4px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .m-nav-item.active { color: var(--m-accent); }
+        .m-nav-item svg { width: 20px; height: 20px; }
+
+        .m-pdf-btn {
+            position: fixed;
+            bottom: 104px;
+            right: 28px;
+            width: 58px;
+            height: 58px;
+            border-radius: 29px;
+            font-weight: 800;
+            font-size: 11px;
+            color: var(--m-accent);
+            background: var(--panel-glass);
+            backdrop-filter: var(--panel-blur);
+            border: var(--panel-border);
+            z-index: 101;
+            opacity: 0;
+            transform: scale(.5);
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: opacity .3s, transform .3s;
+            cursor: pointer;
+        }
+
+        .m-sheet {
+            position: fixed;
+            inset: 0;
+            z-index: 200;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            background: rgba(0,0,0,.35);
+            backdrop-filter: blur(6px);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .3s;
+        }
+        .m-sheet.open { opacity: 1; pointer-events: auto; }
+        .m-sheet-inner {
+            background: var(--panel-glass);
+            backdrop-filter: var(--panel-blur);
+            border: var(--panel-border);
+            border-radius: 28px 28px 0 0;
+            width: 100%;
+            max-width: 500px;
+            padding: 24px 20px 40px;
+        }
+        .m-sheet-inner input {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            font-size: 16px;
+            background: var(--glass);
+            color: var(--text-main);
+            outline: none;
+            margin-top: 6px;
+        }
+
+        /* ══ CROP MODAL ═════════════════════════════════ */
+        #crop-overlay {
+            position: fixed; inset: 0; z-index: 500;
+            background: #1a1a1a;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transform: scale(1.03);
+            transition: opacity .28s ease, transform .28s ease;
+        }
+        #crop-overlay.open {
+            opacity: 1;
+            pointer-events: auto;
+            transform: scale(1);
+        }
+
+        #crop-toolbar {
+            width: 100%; max-width: 700px;
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 16px; flex-shrink: 0;
+            color: #fff; font-family: -apple-system, system-ui, sans-serif;
+            font-size: 14px; font-weight: 600;
+        }
+        #crop-toolbar button {
+            padding: 8px 18px; border: none; border-radius: 10px;
+            font-size: 14px; font-weight: 700; cursor: pointer;
+        }
+        #crop-cancel-btn { background: rgba(255,255,255,.15); color: #fff; }
+        #crop-apply-btn  { background: #2563eb; color: #fff; }
+
+        #crop-canvas-wrap {
+            position: relative;
+            flex: 1; width: 100%; max-width: 700px;
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden; user-select: none; touch-action: none;
+        }
+        #crop-canvas { display: block; }
+
+        /* Рамка кадрування */
+        #crop-box {
+            position: absolute;
+            border: 2px solid rgba(255,255,255,.9);
+            box-shadow: 0 0 0 9999px rgba(0,0,0,.6);
+            cursor: move;
+            box-sizing: border-box;
+        }
+        /* Сітка вирівнювання (правило третин) */
+        #crop-box::before, #crop-box::after {
+            content: ''; position: absolute; inset: 0;
+            pointer-events: none;
+        }
+        #crop-box::before {
+            background:
+                linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px) 0 33.33% / 100% 33.33%,
+                linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px) 33.33% 0 / 33.33% 100%;
+        }
+        /* Кутові куточки (L-подібні) замість квадратиків */
+        .crop-handle {
+            position: absolute; width: 20px; height: 20px;
+            box-sizing: border-box;
+        }
+        .crop-handle.tl { top: -2px; left: -2px;
+            border-top: 3px solid #fff; border-left: 3px solid #fff; cursor: nwse-resize; }
+        .crop-handle.tr { top: -2px; right: -2px;
+            border-top: 3px solid #fff; border-right: 3px solid #fff; cursor: nesw-resize; }
+        .crop-handle.bl { bottom: -2px; left: -2px;
+            border-bottom: 3px solid #fff; border-left: 3px solid #fff; cursor: nesw-resize; }
+        .crop-handle.br { bottom: -2px; right: -2px;
+            border-bottom: 3px solid #fff; border-right: 3px solid #fff; cursor: nwse-resize; }
+        .crop-handle.tm { top: -5px; left: calc(50% - 10px); cursor: ns-resize;
+            border-top: 3px solid #fff; width: 20px; height: 10px; }
+        .crop-handle.bm { bottom: -5px; left: calc(50% - 10px); cursor: ns-resize;
+            border-bottom: 3px solid #fff; width: 20px; height: 10px; }
+        .crop-handle.ml { left: -5px; top: calc(50% - 10px); cursor: ew-resize;
+            border-left: 3px solid #fff; width: 10px; height: 20px; }
+        .crop-handle.mr { right: -5px; top: calc(50% - 10px); cursor: ew-resize;
+            border-right: 3px solid #fff; width: 10px; height: 20px; }
+
+        /* Панель повороту */
+        #crop-rotate-panel {
+            width: 100%; max-width: 700px;
+            padding: 10px 16px 14px;
+            flex-shrink: 0;
+            font-family: -apple-system, system-ui, sans-serif;
+            color: #fff;
+        }
+        #crop-rotate-row {
+            display: flex; align-items: center; gap: 12px;
+        }
+        #crop-rotate-label {
+            font-size: 12px; color: rgba(255,255,255,.6);
+            min-width: 60px; text-align: right; flex-shrink: 0;
+        }
+        #crop-angle-val {
+            font-size: 13px; font-weight: 700;
+            min-width: 48px; text-align: center; flex-shrink: 0;
+        }
+        #crop-rotate-slider {
+            flex: 1; -webkit-appearance: none; appearance: none;
+            height: 4px; background: rgba(255,255,255,.25);
+            border-radius: 2px; outline: none; cursor: pointer;
+        }
+        #crop-rotate-slider::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 22px; height: 22px;
+            border-radius: 50%; background: #fff; cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,.5);
+        }
+        #crop-rotate-slider::-moz-range-thumb {
+            width: 22px; height: 22px; border-radius: 50%;
+            background: #fff; cursor: pointer; border: none;
+        }
+        #crop-reset-angle {
+            padding: 5px 10px; background: rgba(255,255,255,.15);
+            border: none; border-radius: 8px; color: #fff;
+            font-size: 12px; cursor: pointer; flex-shrink: 0;
+        }
+
+        /* ══ CUSTOM INLINE SELECT ═══════════════════════ */
+        .c-select { position: relative; width: 100%; }
+
+        .c-select-trigger {
+            width: 100%;
+            padding: 11px 40px 11px 14px;
+            border: 1px solid rgba(255,255,255,.6);
+            border-radius: 14px;
+            font-size: 14px;
+            background: rgba(255,255,255,.5);
+            color: var(--text-main);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-family: inherit;
+            box-sizing: border-box;
+            -webkit-user-select: none;
+            user-select: none;
+            transition: border-radius .22s ease, border-color .18s ease;
+        }
+        .c-select-trigger:hover { background: rgba(255,255,255,.65); }
+        .c-select.open .c-select-trigger {
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+            border-bottom-color: rgba(200,200,200,.3);
+        }
+        .c-select-arrow {
+            width: 18px; height: 18px;
+            flex-shrink: 0;
+            color: var(--text-muted);
+            transition: transform .24s ease;
+            pointer-events: none;
+        }
+        .c-select.open .c-select-arrow { transform: rotate(180deg); }
+
+        .c-select-panel {
+            overflow: hidden;
+            max-height: 0;
+            opacity: 0;
+            border: 1px solid rgba(255,255,255,.6);
+            border-top: none;
+            border-radius: 0 0 14px 14px;
+            background: rgba(230,232,235,.9);
+            transition: max-height .28s ease, opacity .22s ease;
+            margin-top: 0;
+        }
+        .c-select.open .c-select-panel {
+            max-height: 320px;
+            opacity: 1;
+        }
+        .c-select-option {
+            padding: 13px 16px;
+            font-size: 14px;
+            font-family: inherit;
+            color: var(--text-main);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .c-select-option + .c-select-option { border-top: 1px solid rgba(0,0,0,.06); }
+        .c-select-option:active { background: rgba(255,255,255,.5); }
+        .c-select-option.selected { font-weight: 700; }
+
+        .c-radio {
+            width: 22px; height: 22px;
+            border-radius: 50%;
+            border: 2px solid rgba(0,0,0,.2);
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background .15s, border-color .15s;
+        }
+        .c-select-option.selected .c-radio {
+            background: var(--m-accent);
+            border-color: var(--m-accent);
+        }
+        .c-radio-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: #fff;
+            opacity: 0;
+            transform: scale(0);
+            transition: opacity .15s, transform .18s ease;
+        }
+        .c-select-option.selected .c-radio-dot { opacity: 1; transform: scale(1); }
+
+        /* Mobile */
+        #mobile .c-select-trigger {
+            padding: 13px 40px 13px 14px;
+            border-radius: 16px;
+            font-size: 16px;
+            background: var(--glass);
+            border-color: var(--glass-border);
+        }
+        #mobile .c-select.open .c-select-trigger {
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+        }
+        #mobile .c-select-panel {
+            border-radius: 0 0 16px 16px;
+            background: rgba(224,226,230,.92);
+            border-color: var(--glass-border);
+        }
+        #mobile .c-select-option { padding: 15px 18px; font-size: 16px; }
+
+        /* ══ PHOTO ACTION POPUP ═════════════════════════ */
+        #photo-popup {
+            position: fixed;
+            z-index: 300;
+            background: rgba(255,255,255,.28);
+            backdrop-filter: blur(32px) saturate(200%);
+            -webkit-backdrop-filter: blur(32px) saturate(200%);
+            border: 1px solid rgba(255,255,255,.60);
+            border-radius: 18px;
+            padding: 6px 0;
+            min-width: 210px;
+            box-shadow: 0 8px 30px rgba(0,0,0,.08);
+            opacity: 0;
+            transform: scale(.85) translateY(-8px);
+            pointer-events: none;
+            transition: opacity .2s ease, transform .2s ease;
+        }
+        #photo-popup.open {
+            opacity: 1;
+            transform: scale(1) translateY(0);
+            pointer-events: auto;
+        }
+        .pp-btn {
+            display: flex;
+            align-items: center;
+            gap: 13px;
+            width: 100%;
+            padding: 12px 16px;
+            background: none;
+            border: none;
+            color: var(--text-main);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            text-align: left;
+            font-family: -apple-system, system-ui, sans-serif;
+            transition: background .12s;
+        }
+        .pp-btn:hover { background: rgba(0,0,0,.05); }
+        .pp-btn:active { background: rgba(0,0,0,.09); }
+        .pp-btn.danger { color: #dc2626; }
+        .pp-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 9px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 15px;
+            flex-shrink: 0;
+        }
+        .pp-icon.mono  { background: rgba(0,0,0,.07); color: var(--text-main); }
+        .pp-icon.red   { background: rgba(220,38,38,.1); color: #dc2626; }
+        .pp-divider {
+            height: 1px;
+            background: rgba(0,0,0,.07);
+            margin: 4px 0;
+        }
+        .pp-rotate-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 0 8px;
+        }
+        .pp-rot-btn {
+            flex: 1;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: none;
+            border: none;
+            color: var(--text-main);
+            cursor: pointer;
+            transition: background .12s, transform .1s;
+            padding: 0;
+            border-radius: 8px;
+        }
+        .pp-rot-btn:hover  { background: rgba(0,0,0,.04); }
+        .pp-rot-btn:active { transform: scale(.9); }
+
+        .pp-rot-divider {
+            width: 1px;
+            height: 22px;
+            background: rgba(0,0,0,.1);
+            flex-shrink: 0;
+        }
+
+        /* ══ CUSTOM CALENDAR PICKER ════════════════════ */
+        .cal-trigger {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            font-size: 16px;
+            background: var(--glass);
+            color: var(--text-main);
+            outline: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            user-select: none;
+            -webkit-user-select: none;
+            transition: background .2s, border-color .2s;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        .cal-trigger:active { background: rgba(255,255,255,.7); }
+        .cal-trigger .cal-trigger-text { flex: 1; text-align: left; }
+        .cal-trigger svg { flex-shrink: 0; color: var(--text-muted); }
+
+        /* Overlay backdrop — mobile: centered small dialog */
+        .cal-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 300;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0,0,0,.35);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .22s ease;
+            padding: 40px 40px;
+        }
+        .cal-overlay.open {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        /* Calendar sheet */
+        .cal-sheet {
+            width: 100%;
+            max-width: 290px;
+            background: rgba(240,241,243,.98);
+            backdrop-filter: blur(40px) saturate(180%);
+            -webkit-backdrop-filter: blur(40px) saturate(180%);
+            border: 1px solid rgba(255,255,255,.6);
+            border-radius: 20px;
+            padding: 0 0 6px 0;
+            transform: scale(.88);
+            transition: transform .25s cubic-bezier(.34,1.4,.64,1);
+            overflow: hidden;
+            box-shadow: 0 16px 48px rgba(0,0,0,.28);
+        }
+        .cal-overlay.open .cal-sheet {
+            transform: scale(1);
+        }
+
+        /* Header strip with selected date */
+        .cal-header-strip {
+            background: rgba(228,230,233,.98);
+            color: var(--text-main);
+            padding: 10px 14px 8px;
+            border-bottom: 1px solid rgba(0,0,0,.08);
+        }
+        .cal-header-year {
+            font-size: 11px;
+            font-weight: 600;
+            opacity: .55;
+            margin-bottom: 1px;
+            letter-spacing: .4px;
+        }
+        .cal-header-date {
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: -.4px;
+            line-height: 1;
+        }
+
+        /* Desktop: inline dropdown below trigger */
+        .d-cal-popup {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            right: 0;
+            z-index: 400;
+            background: rgba(240,241,243,1);
+            backdrop-filter: none;
+            border: 1px solid rgba(210,212,216,.9);
+            border-radius: 16px;
+            box-shadow: 0 10px 36px rgba(0,0,0,.22);
+            overflow: hidden;
+            transform-origin: top center;
+            transform: scaleY(.85);
+            opacity: 0;
+            pointer-events: none;
+            transition: transform .2s cubic-bezier(.34,1.4,.64,1), opacity .18s ease;
+        }
+        .d-cal-popup.open {
+            transform: scaleY(1);
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .d-cal-popup .cal-header-strip {
+            background: rgba(228,230,233,1);
+            padding: 10px 14px 8px;
+        }
+        .d-cal-popup .cal-header-date { font-size: 17px; }
+        .d-cal-popup .cal-nav { padding: 8px 12px 2px; }
+        .d-cal-popup .cal-nav-btn { width: 28px; height: 28px; }
+        .d-cal-popup .cal-weekdays { padding: 0 8px; }
+        .d-cal-popup .cal-days { padding: 0 8px; gap: 1px; }
+        .d-cal-popup .cal-day { font-size: 12px; }
+        .d-cal-popup .cal-nav-title { font-size: 13px; }
+        .d-cal-popup .cal-wd { font-size: 10px; }
+        .d-cal-popup .cal-actions { padding: 2px 14px 0; }
+        .d-cal-popup .cal-action-btn { padding: 8px 0; font-size: 13px; }
+
+        /* Month navigation */
+        .cal-nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 7px 12px 2px;
+        }
+        .cal-nav-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255,255,255,.5);
+            backdrop-filter: blur(10px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background .18s;
+            flex-shrink: 0;
+        }
+        .cal-nav-btn:active { background: rgba(255,255,255,.85); }
+        .cal-nav-title {
+            font-weight: 800;
+            font-size: 13px;
+            color: var(--text-main);
+            letter-spacing: -.2px;
+        }
+
+        /* Weekday row */
+        .cal-weekdays {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            padding: 0 8px;
+            margin-bottom: 2px;
+        }
+        .cal-wd {
+            text-align: center;
+            font-size: 9px;
+            font-weight: 700;
+            color: var(--text-muted);
+            padding: 3px 0;
+            text-transform: uppercase;
+            letter-spacing: .4px;
+        }
+
+        /* Days grid */
+        .cal-days {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            padding: 0 8px;
+            gap: 1px;
+        }
+        .cal-day {
+            aspect-ratio: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 500;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: background .15s, color .15s;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .cal-day:not(.empty):active { background: rgba(17,24,39,.12); }
+        .cal-day.empty { pointer-events: none; }
+        .cal-day.today {
+            font-weight: 800;
+            color: #2563eb;
+        }
+        .cal-day.selected {
+            background: #111827;
+            color: #fff;
+            font-weight: 700;
+        }
+        .cal-day.today.selected {
+            background: #111827;
+            color: #fff;
+        }
+
+        /* Action buttons */
+        .cal-actions {
+            display: flex;
+            flex-direction: column;
+            padding: 2px 14px 0;
+            gap: 0;
+        }
+        .cal-action-btn {
+            background: transparent;
+            border: none;
+            padding: 8px 0;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-main);
+            cursor: pointer;
+            text-align: right;
+            border-top: 1px solid rgba(0,0,0,.07);
+            transition: opacity .15s;
+        }
+        .cal-action-btn:first-child { border-top: none; }
+        .cal-action-btn.primary { font-weight: 700; }
+        .cal-action-btn.muted { color: var(--text-muted); }
+
+        /* Desktop calendar trigger wrapper */
+        .d-cal-wrap {
+            position: relative;
+        }
+        .d-cal-trigger {
+            width: 100%;
+            padding: 11px 14px;
+            border: 1px solid rgba(255,255,255,.6);
+            border-radius: 14px;
+            font-size: 14px;
+            background: rgba(255,255,255,.5);
+            color: var(--text-main);
+            outline: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            user-select: none;
+            -webkit-user-select: none;
+            font-family: -apple-system, system-ui, sans-serif;
+        }
+        .d-cal-trigger:hover { background: rgba(255,255,255,.7); }
+
+        /* ══ PRINT ══════════════════════════════════════ */
+        @media print {
+            @page { size: A4; margin: 0; }
+            html, body { width: 210mm !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: white !important; }
+            #mobile  { display: none !important; }
+            #desktop { display: block !important; height: auto !important; overflow: visible !important; background: white !important; }
+            .d-wrap  { display: block !important; height: auto !important; }
+            .d-side, .d-header, .btn-blue, .btn-green, #d-modal { display: none !important; }
+            .d-preview {
+                display: block !important; width: 210mm !important;
+                margin: 0 auto !important; padding: 0 !important;
+                overflow: visible !important; background: white !important;
+            }
+            .a4-page {
+                width: 210mm !important; min-height: 297mm !important; height: 297mm !important;
+                margin: 0 !important; padding: 15mm 15mm 15mm 20mm !important;
+                background: white !important; box-shadow: none !important; border: none !important;
+                overflow: visible !important; display: flex !important; position: relative !important;
+                page-break-after: always !important; break-after: page !important;
+            }
+            .a4-page:last-child { page-break-after: auto !important; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════
+     DESKTOP LAYOUT
+═══════════════════════════════════════════ -->
+<div id="desktop">
+    <div class="d-wrap">
+        <div class="d-side">
+            <div class="d-header">
+                <h3 style="margin:0;font-size:16px;font-weight:800;letter-spacing:-.3px;">PhotoDoc Pro</h3>
+                <div style="display:flex;gap:8px;">
+                    <button class="btn-green" onclick="dOpenModal()">PDF</button>
+                    <button class="btn-blue"  onclick="window.print()">Друк</button>
+                </div>
+            </div>
+            <div class="d-content">
+                <div class="d-group">
+                    <span class="d-lbl">Дія</span>
+                    <div class="c-select" id="d-type-select">
+                        <div class="c-select-trigger" onclick="csToggle('d-type-select')">
+                            <span class="c-select-label">Огляд місця події</span>
+                            <svg class="c-select-arrow" viewBox="0 0 20 20" fill="none"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </div>
+                        <div class="c-select-panel">
+                            <div class="c-select-option selected" data-value="огляду місця події" onclick="csSelect('d-type-select',this)">Огляд місця події<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                            <div class="c-select-option" data-value="обшуку" onclick="csSelect('d-type-select',this)">Обшук<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                            <div class="c-select-option" data-value="особистого обшуку" onclick="csSelect('d-type-select',this)">Особистий обшук<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                            <div class="c-select-option" data-value="огляду предмета" onclick="csSelect('d-type-select',this)">Огляд предмета<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                            <div class="c-select-option" data-value="затримання особи" onclick="csSelect('d-type-select',this)">Затримання особи<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="d-group">
+                    <span class="d-lbl">Дата</span>
+                    <div class="d-cal-wrap">
+                        <div class="d-cal-trigger" id="d-cal-trigger" onclick="dCalToggle()">
+                            <span id="d-cal-label" style="flex:1;text-align:left;color:var(--text-muted);">Оберіть дату</span>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+                        </div>
+                        <div class="d-cal-popup" id="d-cal-popup">
+                            <div class="cal-header-strip">
+                                <div class="cal-header-year" id="d-cal-h-year">2026</div>
+                                <div class="cal-header-date" id="d-cal-h-date">Оберіть дату</div>
+                            </div>
+                            <div class="cal-nav">
+                                <button class="cal-nav-btn" onclick="dCalShiftMonth(-1)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+                                </button>
+                                <span class="cal-nav-title" id="d-cal-month-title"></span>
+                                <button class="cal-nav-btn" onclick="dCalShiftMonth(1)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+                                </button>
+                            </div>
+                            <div class="cal-weekdays" id="d-cal-weekdays">
+                                <div class="cal-wd">Пн</div><div class="cal-wd">Вт</div><div class="cal-wd">Ср</div>
+                                <div class="cal-wd">Чт</div><div class="cal-wd">Пт</div><div class="cal-wd">Сб</div><div class="cal-wd">Нд</div>
+                            </div>
+                            <div class="cal-days" id="d-cal-days"></div>
+                            <div class="cal-actions">
+                                <button class="cal-action-btn primary" onclick="dCalConfirm()">Установити</button>
+                                <button class="cal-action-btn muted" onclick="dCalClose()">Скасувати</button>
+                                <button class="cal-action-btn muted" onclick="dCalClear()">Очистити</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="d-group">
+                    <span class="d-lbl">Адреса</span>
+                    <textarea id="d-address" placeholder="Вкажіть адресу" oninput="dUpdate()" rows="3"></textarea>
+                </div>
+                <div class="d-group">
+                    <span class="d-lbl">Рядок підпису</span>
+                    <div class="tog-wrap" id="d-sign-tog" onclick="dTogSign()">
+                        <span class="tog-label">Показувати підпис</span>
+                        <span class="tog-switch"></span>
+                    </div>
+                    <div id="d-sign-extra" class="sign-extra" style="display:none;">
+                        <div class="c-select" id="d-sign-role-select">
+                            <div class="c-select-trigger" onclick="csToggle('d-sign-role-select')">
+                                <span class="c-select-label">Спеціаліст</span>
+                                <svg class="c-select-arrow" viewBox="0 0 20 20" fill="none"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </div>
+                            <div class="c-select-panel">
+                                <div class="c-select-option selected" data-value="specialist" onclick="dSignRoleChange('specialist',this)">Спеціаліст<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                                <div class="c-select-option" data-value="investigator" onclick="dSignRoleChange('investigator',this)">Слідчий<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                            </div>
+                        </div>
+                        <input type="text" id="d-pib" placeholder="ПІБ спеціаліста" oninput="dUpdate()">
+                        <div class="seg-ctrl">
+                            <div class="seg-btn active" id="d-sm-all" onclick="dSetSignMode('all')">На всіх</div>
+                            <div class="seg-btn" id="d-sm-last" onclick="dSetSignMode('last')">На останній</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="d-group">
+                    <span class="d-lbl">Текст «ІЛЮСТРАТИВНА ТАБЛИЦЯ»</span>
+                    <div class="seg-ctrl">
+                        <div class="seg-btn active" id="d-hm-all" onclick="dSetHdrMode('all')">На всіх</div>
+                        <div class="seg-btn" id="d-hm-first" onclick="dSetHdrMode('first')">Тільки на першій</div>
+                    </div>
+                </div>
+                <hr style="border:0;border-top:1px solid rgba(0,0,0,.07);margin:20px 0;">
+                <div id="d-groups"></div>
+                <button onclick="addGroup()"
+                        style="width:100%;padding:12px;cursor:pointer;border-radius:14px;border:1px dashed rgba(107,114,128,.4);background:rgba(255,255,255,.3);font-weight:700;font-size:13px;color:var(--text-main);">
+                    + Додати категорію
+                </button>
+            </div>
+        </div>
+        <div class="d-preview" id="d-preview"></div>
+    </div>
+
+    <div class="d-modal" id="d-modal">
+        <div class="d-modal-box">
+            <h4 style="margin:0 0 15px;">Назва PDF файлу</h4>
+            <input type="text" id="d-fname" value="Фототаблиця">
+            <div style="display:flex;gap:10px;">
+                <button class="btn-blue" style="background:#999;" onclick="dCloseModal()">Скасувати</button>
+                <button class="btn-blue" id="d-gen-btn" onclick="dGenPDF()">Зберегти</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     MOBILE LAYOUT
+═══════════════════════════════════════════ -->
+<div id="mobile">
+    <div class="m-spacer"></div>
+    <div class="m-slider" id="m-slider">
+
+        <!-- slide 0: editor -->
+        <div class="m-slide" id="m-edit-slide">
+            <div class="m-inner">
+                <div class="m-group">
+                    <span class="m-lbl">Дія</span>
+                    <div class="c-select" id="m-type-select">
+                        <div class="c-select-trigger" onclick="csToggle('m-type-select')">
+                            <span class="c-select-label">Огляд місця події</span>
+                            <svg class="c-select-arrow" viewBox="0 0 20 20" fill="none"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </div>
+                        <div class="c-select-panel">
+                            <div class="c-select-option selected" data-value="огляду місця події" onclick="csSelect('m-type-select',this)">Огляд місця події<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                            <div class="c-select-option" data-value="обшуку" onclick="csSelect('m-type-select',this)">Обшук<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                            <div class="c-select-option" data-value="особистого обшуку" onclick="csSelect('m-type-select',this)">Особистий обшук<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                            <div class="c-select-option" data-value="огляду предмета" onclick="csSelect('m-type-select',this)">Огляд предмета<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                            <div class="c-select-option" data-value="затримання особи" onclick="csSelect('m-type-select',this)">Затримання особи<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="m-group">
+                    <span class="m-lbl">Дата</span>
+                    <div class="cal-trigger" id="m-cal-trigger" onclick="calOpen('m')">
+                        <span class="cal-trigger-text" id="m-cal-label" style="color:var(--text-muted);">Оберіть дату</span>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+                    </div>
+                </div>
+                <div class="m-group">
+                    <span class="m-lbl">Місце події (повна адреса)</span>
+                    <textarea id="m-address" placeholder="Вкажіть адресу"
+                              oninput="mSave();mResize(this)" rows="2"></textarea>
+                </div>
+                <div class="m-group">
+                    <span class="m-lbl">Рядок підпису</span>
+                    <div class="tog-wrap" id="m-sign-tog" onclick="mTogSign()">
+                        <span class="tog-label">Показувати підпис</span>
+                        <span class="tog-switch"></span>
+                    </div>
+                    <div id="m-sign-extra" class="sign-extra" style="display:none;">
+                        <div class="c-select" id="m-sign-role-select">
+                            <div class="c-select-trigger" onclick="csToggle('m-sign-role-select')">
+                                <span class="c-select-label">Спеціаліст</span>
+                                <svg class="c-select-arrow" viewBox="0 0 20 20" fill="none"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </div>
+                            <div class="c-select-panel">
+                                <div class="c-select-option selected" data-value="specialist" onclick="mSignRoleChange('specialist',this)">Спеціаліст<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                                <div class="c-select-option" data-value="investigator" onclick="mSignRoleChange('investigator',this)">Слідчий<span class="c-radio"><span class="c-radio-dot"></span></span></div>
+                            </div>
+                        </div>
+                        <input type="text" id="m-pib" placeholder="ПІБ спеціаліста" oninput="mSave()">
+                        <div class="seg-ctrl">
+                            <div class="seg-btn active" id="m-sm-all" onclick="mSetSignMode('all')">На всіх</div>
+                            <div class="seg-btn" id="m-sm-last" onclick="mSetSignMode('last')">На останній</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="m-group">
+                    <span class="m-lbl">Текст «ІЛЮСТРАТИВНА ТАБЛИЦЯ»</span>
+                    <div class="seg-ctrl">
+                        <div class="seg-btn active" id="m-hm-all" onclick="mSetHdrMode('all')">На всіх</div>
+                        <div class="seg-btn" id="m-hm-first" onclick="mSetHdrMode('first')">Тільки на першій</div>
+                    </div>
+                </div>
+                <div id="m-groups"></div>
+                <div class="m-add-btn m-card" onclick="addGroup()"
+                     style="border-style:dashed;margin-top:10px;">ДОДАТИ КАТЕГОРІЮ</div>
+            </div>
+        </div>
+
+        <!-- slide 1: preview -->
+        <div class="m-slide" id="m-preview-slide">
+            <div id="m-a4-wrap" class="m-a4-wrap">
+                <div id="m-preview"></div>
+            </div>
+            <div id="m-scroll-stop"></div>
+        </div>
+    </div>
+
+    <button class="m-pdf-btn" id="m-pdf-btn" onclick="mOpenSheet()">PDF</button>
+
+    <div class="m-sheet" id="m-sheet" onclick="if(event.target===this)mCloseSheet()">
+        <div class="m-sheet-inner">
+            <span class="m-lbl">Назва документа</span>
+            <input type="text" id="m-fname" value="Фототаблиця" placeholder="Введіть назву...">
+            <div style="display:flex;gap:10px;margin-top:14px;">
+                <button onclick="mCloseSheet()"
+                        style="flex:1;padding:14px;border-radius:16px;border:none;background:rgba(0,0,0,.1);font-size:15px;cursor:pointer;">
+                    Скасувати
+                </button>
+                <button onclick="mCloseSheet();mGenPDF()"
+                        style="flex:1;padding:14px;border-radius:16px;border:none;background:var(--m-accent);color:#fff;font-weight:700;font-size:15px;cursor:pointer;">
+                    Зберегти
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <nav class="m-nav">
+        <div class="m-nav-item active" id="m-nav0" onclick="mTab(0)">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Дані
+        </div>
+        <div class="m-nav-item" id="m-nav1" onclick="mTab(1)">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Таблиця
+        </div>
+    </nav>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     CALENDAR PICKER OVERLAY
+═══════════════════════════════════════════ -->
+<div class="cal-overlay" id="cal-overlay" onclick="if(event.target===this)calClose()">
+    <div class="cal-sheet">
+        <div class="cal-header-strip">
+            <div class="cal-header-year" id="cal-h-year">2026</div>
+            <div class="cal-header-date" id="cal-h-date">Оберіть дату</div>
+        </div>
+        <div class="cal-nav">
+            <button class="cal-nav-btn" onclick="calShiftMonth(-1)">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+            <span class="cal-nav-title" id="cal-month-title"></span>
+            <button class="cal-nav-btn" onclick="calShiftMonth(1)">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+            </button>
+        </div>
+        <div class="cal-weekdays">
+            <div class="cal-wd">Пн</div>
+            <div class="cal-wd">Вт</div>
+            <div class="cal-wd">Ср</div>
+            <div class="cal-wd">Чт</div>
+            <div class="cal-wd">Пт</div>
+            <div class="cal-wd">Сб</div>
+            <div class="cal-wd">Нд</div>
+        </div>
+        <div class="cal-days" id="cal-days"></div>
+        <div class="cal-actions">
+            <button class="cal-action-btn primary" onclick="calConfirm()">Установити</button>
+            <button class="cal-action-btn muted" onclick="calClose()">Скасувати</button>
+            <button class="cal-action-btn muted" onclick="calClear()">Очистити</button>
+        </div>
+    </div>
+</div>
+
+<script>
+'use strict';
+const { jsPDF } = window.jspdf;
+
+/* ══ SHARED STATE ══════════════════════════════════ */
+const S = {
+    type:          'огляду місця події',
+    date:          '',
+    address:       '',
+    pib:           '',
+    signatureShow: false,  // показувати рядок підпису
+    signatureMode: 'all',  // 'all' | 'last'
+    signRole:      'specialist', // 'specialist' | 'investigator'
+    headerMode:    'all',  // 'all' | 'first'
+    groups:  [{ id: 1, title: 'Загальний вигляд', photos: [] }]
+};
+
+/* ══ DEVICE DETECTION ══════════════════════════════ */
+let IS_MOBILE = false;
+
+function detectAndInit() {
+    IS_MOBILE = /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent)
+             || window.innerWidth < 768;
+    const d = document.getElementById('desktop');
+    const m = document.getElementById('mobile');
+    if (IS_MOBILE) {
+        m.style.display = 'flex';
+        d.style.display = 'none';
+        document.body.style.cssText =
+            'margin:0;overflow:hidden;background:linear-gradient(135deg,#f3f4f6 0%,#e5e7eb 50%,#d1d5db 100%);background-attachment:fixed;';
+        mInit();
+    } else {
+        d.style.display = 'block';
+        m.style.display = 'none';
+        document.body.style.cssText = 'margin:0;overflow:hidden;background:#f0f2f5;';
+        dInit();
+    }
+}
+window.addEventListener('load', detectAndInit);
+window.addEventListener('resize', () => {
+    const nowMobile = window.innerWidth < 768;
+    if (nowMobile !== IS_MOBILE) detectAndInit();
+});
+
+/* ══ HELPERS ════════════════════════════════════════ */
+function addGroup() {
+    S.groups.push({ id: Date.now(), title: "Об'єкт", photos: [] });
+    IS_MOBILE ? mRenderGroups() : (dRenderEditor(), dRenderPreview());
+}
+
+function fmtDate() {
+    return S.date ? new Date(S.date + 'T12:00:00').toLocaleDateString('uk-UA') : '____';
+}
+
+/* ══ CUSTOM CALENDAR PICKER ════════════════════════ */
+const CAL_MONTHS_UK = ['Січень','Лютий','Березень','Квітень','Травень','Червень',
+                       'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+const CAL_MONTHS_GEN = ['січня','лютого','березня','квітня','травня','червня',
+                        'липня','серпня','вересня','жовтня','листопада','грудня'];
+const CAL_DAYS_UK = ['Пн','Вт','Ср','Чт','Пт','Сб','Нд'];
+
+let _calCtx = null;         // 'm' or 'd'
+let _calYear = 2026;
+let _calMonth = 4;           // 0-based
+let _calSelected = null;     // Date object or null
+let _calPending = null;      // Date selected in picker but not yet confirmed
+
+function calOpen(ctx) {
+    _calCtx = ctx;
+    const today = new Date();
+
+    if (S.date) {
+        _calSelected = new Date(S.date + 'T12:00:00');
+        _calPending  = new Date(_calSelected);
+        _calYear  = _calSelected.getFullYear();
+        _calMonth = _calSelected.getMonth();
+    } else {
+        _calSelected = null;
+        _calPending  = null;
+        _calYear  = today.getFullYear();
+        _calMonth = today.getMonth();
+    }
+
+    calRender();
+    document.getElementById('cal-overlay').classList.add('open');
+}
+
+function calClose() {
+    document.getElementById('cal-overlay').classList.remove('open');
+}
+
+function calClear() {
+    _calPending  = null;
+    _calSelected = null;
+    S.date = '';
+    calUpdateTriggers();
+    IS_MOBILE ? mRenderPreview() : dUpdate();
+    calClose();
+}
+
+function calConfirm() {
+    if (_calPending) {
+        _calSelected = _calPending;
+        const y = _calSelected.getFullYear();
+        const m = String(_calSelected.getMonth()+1).padStart(2,'0');
+        const d = String(_calSelected.getDate()).padStart(2,'0');
+        S.date = `${y}-${m}-${d}`;
+    } else {
+        S.date = '';
+    }
+    calUpdateTriggers();
+    IS_MOBILE ? (mSave(), mRenderPreview()) : dUpdate();
+    calClose();
+}
+
+function calUpdateTriggers() {
+    const label = S.date
+        ? new Date(S.date + 'T12:00:00').toLocaleDateString('uk-UA')
+        : 'Оберіть дату';
+    const muted = !S.date;
+
+    const mEl = document.getElementById('m-cal-label');
+    const dEl = document.getElementById('d-cal-label');
+    if (mEl) { mEl.textContent = label; mEl.style.color = muted ? 'var(--text-muted)' : 'var(--text-main)'; }
+    if (dEl) { dEl.textContent = label; dEl.style.color = muted ? 'var(--text-muted)' : 'var(--text-main)'; }
+}
+
+function calShiftMonth(delta) {
+    _calMonth += delta;
+    if (_calMonth < 0)  { _calMonth = 11; _calYear--; }
+    if (_calMonth > 11) { _calMonth = 0;  _calYear++; }
+    calRender();
+}
+
+function calRender() {
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    // Header
+    document.getElementById('cal-month-title').textContent =
+        CAL_MONTHS_UK[_calMonth] + ' ' + _calYear + ' р.';
+
+    if (_calPending) {
+        document.getElementById('cal-h-year').textContent = _calPending.getFullYear();
+        const wday = _calPending.toLocaleDateString('uk-UA', { weekday: 'short' });
+        const d    = _calPending.getDate();
+        const mon  = CAL_MONTHS_GEN[_calPending.getMonth()];
+        document.getElementById('cal-h-date').textContent =
+            wday.charAt(0).toUpperCase() + wday.slice(1) + ', ' + d + ' ' + mon + '.';
+    } else {
+        document.getElementById('cal-h-year').textContent = _calYear;
+        document.getElementById('cal-h-date').textContent = 'Оберіть дату';
+    }
+
+    // Days grid
+    const grid = document.getElementById('cal-days');
+    grid.innerHTML = '';
+
+    // First day of month (Mon=0 .. Sun=6)
+    const firstDow = (new Date(_calYear, _calMonth, 1).getDay() + 6) % 7;
+    const daysInMonth = new Date(_calYear, _calMonth + 1, 0).getDate();
+
+    for (let i = 0; i < firstDow; i++) {
+        const el = document.createElement('div');
+        el.className = 'cal-day empty';
+        grid.appendChild(el);
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+        const el = document.createElement('div');
+        el.className = 'cal-day';
+        el.textContent = d;
+
+        const thisDate = new Date(_calYear, _calMonth, d);
+        thisDate.setHours(0,0,0,0);
+
+        if (thisDate.getTime() === today.getTime()) el.classList.add('today');
+        if (_calPending) {
+            const pd = new Date(_calPending); pd.setHours(0,0,0,0);
+            if (thisDate.getTime() === pd.getTime()) el.classList.add('selected');
+        }
+
+        el.addEventListener('click', () => {
+            _calPending = new Date(_calYear, _calMonth, d, 12, 0, 0);
+            calRender();
+        });
+        grid.appendChild(el);
+    }
+}
+
+/* ══ DESKTOP CALENDAR (inline dropdown) ════════════ */
+let _dCalYear = 2026, _dCalMonth = 0, _dCalPending = null;
+
+function dCalToggle() {
+    const popup = document.getElementById('d-cal-popup');
+    if (popup.classList.contains('open')) { dCalClose(); return; }
+
+    const today = new Date();
+    if (S.date) {
+        _dCalPending = new Date(S.date + 'T12:00:00');
+        _dCalYear  = _dCalPending.getFullYear();
+        _dCalMonth = _dCalPending.getMonth();
+    } else {
+        _dCalPending = null;
+        _dCalYear  = today.getFullYear();
+        _dCalMonth = today.getMonth();
+    }
+    dCalRender();
+    popup.classList.add('open');
+    // close on outside click
+    setTimeout(() => document.addEventListener('click', _dCalOutside), 0);
+}
+
+function _dCalOutside(e) {
+    const wrap = document.querySelector('.d-cal-wrap');
+    if (wrap && !wrap.contains(e.target)) { dCalClose(); }
+}
+
+function dCalClose() {
+    document.getElementById('d-cal-popup').classList.remove('open');
+    document.removeEventListener('click', _dCalOutside);
+}
+
+function dCalClear() {
+    _dCalPending = null;
+    S.date = '';
+    calUpdateTriggers();
+    dUpdate();
+    dCalClose();
+}
+
+function dCalConfirm() {
+    if (_dCalPending) {
+        const y = _dCalPending.getFullYear();
+        const m = String(_dCalPending.getMonth()+1).padStart(2,'0');
+        const d = String(_dCalPending.getDate()).padStart(2,'0');
+        S.date = `${y}-${m}-${d}`;
+    } else {
+        S.date = '';
+    }
+    calUpdateTriggers();
+    dUpdate();
+    dCalClose();
+}
+
+function dCalShiftMonth(delta) {
+    _dCalMonth += delta;
+    if (_dCalMonth < 0)  { _dCalMonth = 11; _dCalYear--; }
+    if (_dCalMonth > 11) { _dCalMonth = 0;  _dCalYear++; }
+    dCalRender();
+}
+
+function dCalRender() {
+    const today = new Date(); today.setHours(0,0,0,0);
+    document.getElementById('d-cal-month-title').textContent =
+        CAL_MONTHS_UK[_dCalMonth] + ' ' + _dCalYear + ' р.';
+
+    if (_dCalPending) {
+        document.getElementById('d-cal-h-year').textContent = _dCalPending.getFullYear();
+        const wday = _dCalPending.toLocaleDateString('uk-UA', { weekday: 'short' });
+        const d    = _dCalPending.getDate();
+        const mon  = CAL_MONTHS_GEN[_dCalPending.getMonth()];
+        document.getElementById('d-cal-h-date').textContent =
+            wday.charAt(0).toUpperCase() + wday.slice(1) + ', ' + d + ' ' + mon + '.';
+    } else {
+        document.getElementById('d-cal-h-year').textContent = _dCalYear;
+        document.getElementById('d-cal-h-date').textContent = 'Оберіть дату';
+    }
+
+    const grid = document.getElementById('d-cal-days');
+    grid.innerHTML = '';
+    const firstDow = (new Date(_dCalYear, _dCalMonth, 1).getDay() + 6) % 7;
+    const daysInMonth = new Date(_dCalYear, _dCalMonth + 1, 0).getDate();
+
+    for (let i = 0; i < firstDow; i++) {
+        const el = document.createElement('div'); el.className = 'cal-day empty'; grid.appendChild(el);
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+        const el = document.createElement('div'); el.className = 'cal-day'; el.textContent = d;
+        const thisDate = new Date(_dCalYear, _dCalMonth, d); thisDate.setHours(0,0,0,0);
+        if (thisDate.getTime() === today.getTime()) el.classList.add('today');
+        if (_dCalPending) {
+            const pd = new Date(_dCalPending); pd.setHours(0,0,0,0);
+            if (thisDate.getTime() === pd.getTime()) el.classList.add('selected');
+        }
+        el.addEventListener('click', e => {
+            e.stopPropagation();
+            _dCalPending = new Date(_dCalYear, _dCalMonth, d, 12, 0, 0);
+            dCalRender();
+        });
+        grid.appendChild(el);
+    }
+}
+
+/**
+ * buildA4(i, photos) — будує одну сторінку A4
+ * Структура відповідає PDF-зразку:
+ *   • Заголовок (ІЛЮСТРАТИВНА ТАБЛИЦЯ / підзаголовок / адреса)
+ *   • Два фото з підписами, рівномірно розподілені
+ *   • Номер сторінки внизу праворуч
+ */
+function buildA4(i, photos, totalPages) {
+    const total = totalPages || 1;
+    const slice = photos.slice(i * 2, i * 2 + 2);
+
+    const photosHtml = slice.map((item, idx) => {
+        // Rotation is baked into item.src via canvas — no CSS transform needed.
+        return `
+        <div class="a4-photo-block">
+            <div class="a4-photo-wrap">
+                <img
+                    src="${item.src}"
+                    class="a4-photo-img"
+                    style="max-width:100%; max-height:100%; object-fit:contain; display:block;"
+                >
+            </div>
+            <p class="a4-photo-caption">Зображення №${i * 2 + idx + 1}. ${item.text}</p>
+        </div>`;
+    }).join('');
+
+    const showHeader = S.headerMode === 'all' || i === 0;
+    const showSign   = S.signatureShow && (S.signatureMode === 'all' || i === total - 1);
+
+    let signatureSpacingClass = '';
+    if (showSign) {
+        if (S.signatureMode === 'all') {
+            signatureSpacingClass = 'signature-spacing-normal';
+        } else if (S.signatureMode === 'last' && i === total - 1) {
+            signatureSpacingClass = 'signature-spacing-large';
+        }
+    }
+
+    const pg = document.createElement('div');
+    pg.className = `a4-page${signatureSpacingClass ? ' ' + signatureSpacingClass : ''}`;
+    pg.innerHTML = `
+        ${showHeader ? `<div class="a4-header">
+            <span class="a4-header-title">ІЛЮСТРАТИВНА ТАБЛИЦЯ</span>
+            <p class="a4-header-sub">до протоколу ${S.type} від ${fmtDate()} року</p>
+            <p class="a4-header-addr">за адресою: ${S.address || '_____________________'}</p>
+        </div>` : ''}
+        <div class="a4-photos-area${slice.length === 1 ? ' single' : ''}${!showHeader ? ' no-header' : ''}">
+            ${photosHtml}
+        </div>
+        <div style="margin-top:auto; flex-shrink:0;">
+            ${showSign ? `<div class="a4-signature-row">
+                <span class="a4-sign-left">${S.signRole === 'investigator' ? 'Слідчий' : 'Спеціаліст'}</span>
+                <span class="a4-sign-center"><span class="a4-sign-line"></span></span>
+                <span class="a4-sign-right">${S.pib || '____________________'}</span>
+            </div>` : ''}
+            <div class="a4-page-num">Стор. ${i + 1}</div>
+        </div>`;
+    return pg;
+}
+
+function getPhotos() {
+    const arr = [];
+    S.groups.forEach(g => g.photos.forEach(p => {
+        if (typeof p === 'string') {
+            arr.push({ src: p, rotation: 0, text: g.title });
+        } else {
+            // rotation is baked into src; always 0 for layout purposes
+            arr.push({ src: p.src, rotation: 0, text: g.title });
+        }
+    }));
+    return arr;
+}
+
+/** Стискає зображення і додає до стану */
+async function processFiles(files, gi, cb) {
+    const fileList = Array.isArray(files) ? files : Array.from(files);
+    const total = fileList.length;
+    if (!total) { cb(); return; }
+
+    /* ── Індикатор ── */
+    const mAddBtn  = document.getElementById(`madd${gi}`);
+    const mBarWrap = document.getElementById(`mlbw${gi}`);
+    const mBar     = document.getElementById(`mlb${gi}`);
+    const mCount   = document.getElementById(`mlc${gi}`);
+    const dAddBtn  = document.getElementById(`dadd${gi}`);
+    const dBarWrap = document.getElementById(`dlbw${gi}`);
+    const dBar     = document.getElementById(`dlb${gi}`);
+    const dCount   = document.getElementById(`dlc${gi}`);
+
+    let done = 0;
+
+    function showProgress() {
+        const pct = Math.round(done / total * 100);
+        if (mAddBtn) {
+            mAddBtn.innerHTML = `<div class="m-spinner"></div>${done}/${total}`;
+            mAddBtn.classList.add('loading');
+        }
+        if (mBarWrap) { mBarWrap.style.display = 'block'; mBar.style.width = pct + '%'; }
+        if (mCount)   { mCount.style.display = 'block'; mCount.textContent = `Оброблено ${done} з ${total} фото`; }
+        if (dAddBtn)  dAddBtn.textContent = `Завантаження… ${done}/${total}`;
+        if (dBarWrap) { dBarWrap.style.display = 'block'; dBar.style.width = pct + '%'; }
+        if (dCount)   { dCount.style.display = 'block'; dCount.textContent = `${done} з ${total} фото`; }
+    }
+
+    function hideProgress() {
+        if (mAddBtn) { mAddBtn.innerHTML = 'ДОДАТИ ФОТО'; mAddBtn.classList.remove('loading'); }
+        if (mBarWrap) mBarWrap.style.display = 'none';
+        if (mCount)   mCount.style.display   = 'none';
+        if (dAddBtn)  dAddBtn.textContent = '+ Додати фото або перетягніть сюди';
+        if (dBarWrap) dBarWrap.style.display = 'none';
+        if (dCount)   dCount.style.display   = 'none';
+    }
+
+    showProgress();
+
+    for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i];
+
+        const dataUrl = await new Promise(res => {
+            /* createObjectURL не читає весь файл в пам'ять одразу — набагато надійніше */
+            const objUrl = URL.createObjectURL(file);
+            const img = new Image();
+
+            img.onerror = () => {
+                URL.revokeObjectURL(objUrl);
+                res(null);
+            };
+
+            img.onload = () => {
+                URL.revokeObjectURL(objUrl);
+                try {
+                    const MAX = 1400;
+                    let w = img.naturalWidth, h = img.naturalHeight;
+                    if (!w || !h) { res(null); return; }
+                    if (w > h && w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+                    else if (h > MAX)     { w = Math.round(w * MAX / h); h = MAX; }
+                    const c = document.createElement('canvas');
+                    c.width = w; c.height = h;
+                    c.getContext('2d').drawImage(img, 0, 0, w, h);
+                    res(c.toDataURL('image/jpeg', 0.85));
+                } catch(err) {
+                    res(null);
+                }
+            };
+
+            img.src = objUrl;
+        });
+
+        if (dataUrl) {
+            S.groups[gi].photos.push({ src: dataUrl, rotation: 0 });
+        }
+        done++;
+        showProgress();
+
+        /* мікропауза — даємо браузеру звільнити пам'ять */
+        await new Promise(r => setTimeout(r, 10));
+        if (done % 10 === 0) await new Promise(r => setTimeout(r, 50));
+    }
+
+    hideProgress();
+    cb();
+}
+
+/** Генерує PDF з масиву .a4-page елементів */
+async function pdfFromPages(pages, fname, onProg, onDone) {
+    const pdf = new jsPDF('p', 'mm', 'a4');
+    for (let i = 0; i < pages.length; i++) {
+        onProg && onProg(i, pages.length);
+        const cv = await html2canvas(pages[i], {
+            scale: 3,
+            useCORS: true,
+            allowTaint: true,
+            backgroundColor: '#ffffff'
+        });
+        if (i > 0) pdf.addPage();
+        pdf.addImage(cv.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, 210, 297);
+    }
+    pdf.save(`${fname}.pdf`);
+    onDone && onDone();
+}
+
+/* ══ DESKTOP ════════════════════════════════════════ */
+function dInit() {
+    if (!S.date) {
+        const t = new Date();
+        const y = t.getFullYear();
+        const m = String(t.getMonth()+1).padStart(2,'0');
+        const d = String(t.getDate()).padStart(2,'0');
+        S.date = `${y}-${m}-${d}`;
+        calUpdateTriggers();
+    }
+    dRenderEditor(); dRenderPreview();
+    dUpdateSignRoleUI();
+}
+
+function dUpdate() {
+    S.type    = csGetValue('d-type-select');
+    S.address = document.getElementById('d-address').value;
+    const pibEl = document.getElementById('d-pib');
+    S.pib = pibEl ? pibEl.value : '';
+    dRenderPreview();
+}
+
+function dSignRoleChange(role, optEl) {
+    S.signRole = role;
+    const wrap = document.getElementById('d-sign-role-select');
+    if (wrap) {
+        wrap.querySelectorAll('.c-select-option').forEach(function(o) { o.classList.remove('selected'); });
+        if (optEl) { optEl.classList.add('selected'); }
+        const label = wrap.querySelector('.c-select-label');
+        if (label) label.textContent = role === 'investigator' ? 'Слідчий' : 'Спеціаліст';
+        wrap.classList.remove('open');
+    }
+    dRenderPreview();
+}
+function mSignRoleChange(role, optEl) {
+    S.signRole = role;
+    const wrap = document.getElementById('m-sign-role-select');
+    if (wrap) {
+        wrap.querySelectorAll('.c-select-option').forEach(function(o) { o.classList.remove('selected'); });
+        if (optEl) { optEl.classList.add('selected'); }
+        const label = wrap.querySelector('.c-select-label');
+        if (label) label.textContent = role === 'investigator' ? 'Слідчий' : 'Спеціаліст';
+        wrap.classList.remove('open');
+    }
+    mSave();
+    mRenderPreview();
+}
+function dUpdateSignRoleUI() {
+    const wrap = document.getElementById('d-sign-role-select');
+    if (!wrap) return;
+    wrap.querySelectorAll('.c-select-option').forEach(function(o) {
+        o.classList.toggle('selected', o.getAttribute('data-value') === S.signRole);
+    });
+    const label = wrap.querySelector('.c-select-label');
+    if (label) label.textContent = S.signRole === 'investigator' ? 'Слідчий' : 'Спеціаліст';
+}
+function mUpdateSignRoleUI() {
+    const wrap = document.getElementById('m-sign-role-select');
+    if (!wrap) return;
+    wrap.querySelectorAll('.c-select-option').forEach(function(o) {
+        o.classList.toggle('selected', o.getAttribute('data-value') === S.signRole);
+    });
+    const label = wrap.querySelector('.c-select-label');
+    if (label) label.textContent = S.signRole === 'investigator' ? 'Слідчий' : 'Спеціаліст';
+}
+function dPickRole(role) {}
+function mPickRole(role) {}
+
+/* ── Toggle & Segmented helpers ── */
+function dTogSign() {
+    S.signatureShow = !S.signatureShow;
+    const tog   = document.getElementById('d-sign-tog');
+    const extra = document.getElementById('d-sign-extra');
+    tog.classList.toggle('active', S.signatureShow);
+    extra.style.display = S.signatureShow ? 'flex' : 'none';
+    dRenderPreview();
+}
+function mTogSign() {
+    S.signatureShow = !S.signatureShow;
+    const tog   = document.getElementById('m-sign-tog');
+    const extra = document.getElementById('m-sign-extra');
+    tog.classList.toggle('active', S.signatureShow);
+    extra.style.display = S.signatureShow ? 'flex' : 'none';
+    mRenderPreview();
+}
+function dSetSignMode(mode) {
+    S.signatureMode = mode;
+    document.getElementById('d-sm-all').classList.toggle('active', mode === 'all');
+    document.getElementById('d-sm-last').classList.toggle('active', mode === 'last');
+    dRenderPreview();
+}
+function mSetSignMode(mode) {
+    S.signatureMode = mode;
+    document.getElementById('m-sm-all').classList.toggle('active', mode === 'all');
+    document.getElementById('m-sm-last').classList.toggle('active', mode === 'last');
+    mRenderPreview();
+}
+function dSetHdrMode(mode) {
+    S.headerMode = mode;
+    document.getElementById('d-hm-all').classList.toggle('active', mode === 'all');
+    document.getElementById('d-hm-first').classList.toggle('active', mode === 'first');
+    dRenderPreview();
+}
+function mSetHdrMode(mode) {
+    S.headerMode = mode;
+    document.getElementById('m-hm-all').classList.toggle('active', mode === 'all');
+    document.getElementById('m-hm-first').classList.toggle('active', mode === 'first');
+    mRenderPreview();
+}
+
+function dRenderEditor() {
+    document.getElementById('d-groups').innerHTML = S.groups.map((g, gi) => `
+        <div class="d-card">
+            <div class="d-card-hdr">
+                <textarea class="d-card-title" rows="1"
+                       oninput="S.groups[${gi}].title=this.value;dRenderPreview();this.style.height='auto';this.style.height=this.scrollHeight+'px'"
+                       >${g.title.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+                <button style="border:none;cursor:pointer;color:red;background:none;"
+                        onclick="S.groups.splice(${gi},1);dRenderEditor();dRenderPreview()">✕</button>
+            </div>
+            <div class="d-add-photo" id="dadd${gi}" onclick="document.getElementById('df${gi}').click()">+ Додати фото або перетягніть сюди</div>
+            <div class="d-load-bar-wrap" id="dlbw${gi}"><div class="d-load-bar" id="dlb${gi}"></div></div>
+            <div class="d-load-count" id="dlc${gi}"></div>
+            <input type="file" id="df${gi}" multiple hidden accept="image/*"
+                   onchange="(function(fl,g){var arr=[];for(var i=0;i<fl.length;i++)arr.push(fl[i]);processFiles(arr,g,function(){dRenderEditor();dRenderPreview();});})(this.files,${gi})">
+            <div class="d-photo-grid" id="dpg${gi}">
+                ${g.photos.map((p, pi) => `
+                    <div class="d-photo-item" data-gi="${gi}" data-pi="${pi}"
+                         onclick="photoPopupOpen(event,${gi},${pi})"
+                         oncontextmenu="photoPopupOpen(event,${gi},${pi})">
+                        <img src="${typeof p === 'string' ? p : p.src}"
+                             style="transform:rotate(${typeof p === 'string' ? 0 : (p.rotation || 0)}deg);width:100%;height:100%;object-fit:contain;">
+                    </div>`).join('')}
+            </div>
+        </div>`).join('');
+    dInitSortable();
+    dInitDropZones();
+    // авторозмір textarea назв груп
+    document.querySelectorAll('.d-card-title').forEach(el => {
+        el.style.height = 'auto';
+        el.style.height = el.scrollHeight + 'px';
+    });
+}
+
+function dInitDropZones() {
+    S.groups.forEach((_, gi) => {
+        const zone = document.querySelector(`.d-card:nth-child(${gi + 1}) .d-add-photo`);
+        if (!zone) return;
+        zone.addEventListener('dragover', e => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            zone.classList.add('drag-over');
+        });
+        zone.addEventListener('dragleave', e => {
+            if (!zone.contains(e.relatedTarget)) zone.classList.remove('drag-over');
+        });
+        zone.addEventListener('drop', e => {
+            e.preventDefault();
+            zone.classList.remove('drag-over');
+            const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+            if (files.length) processFiles(files, gi, () => { dRenderEditor(); dRenderPreview(); });
+        });
+    });
+}
+
+function dInitSortable() {
+    S.groups.forEach((_, gi) => {
+        const grid = document.getElementById(`dpg${gi}`);
+        if (!grid) return;
+        new Sortable(grid, {
+            animation: 150,
+            filter: '.d-del',
+            onEnd: evt => {
+                const mv = S.groups[gi].photos.splice(evt.oldIndex, 1)[0];
+                S.groups[gi].photos.splice(evt.newIndex, 0, mv);
+                dRenderPreview();
+            }
+        });
+    });
+}
+function dRenderPreview() {
+    const cont = document.getElementById('d-preview');
+    cont.innerHTML = '';
+    const photos = getPhotos();
+    const n = Math.ceil(photos.length / 2) || 1;
+    for (let i = 0; i < n; i++) cont.appendChild(buildA4(i, photos, n));
+}
+
+function dOpenModal()  { document.getElementById('d-modal').style.display = 'flex'; }
+function dCloseModal() { document.getElementById('d-modal').style.display = 'none'; }
+
+async function dGenPDF() {
+    const btn = document.getElementById('d-gen-btn');
+    btn.disabled = true;
+    btn.textContent = 'Підготовка…';
+
+    const photos = getPhotos();
+    const fname  = document.getElementById('d-fname').value || 'Фототаблиця';
+
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;left:-9999px;top:0;background:#fff;';
+
+    const n = Math.ceil(photos.length / 2) || 1;
+    for (let i = 0; i < n; i++) {
+        const pg = buildA4(i, photos, n);
+        pg.style.width     = '794px';
+        pg.style.height    = '1123px';
+        host.appendChild(pg);
+    }
+    document.body.appendChild(host);
+    await new Promise(r => setTimeout(r, 300));
+
+    const pages = Array.from(host.querySelectorAll('.a4-page'));
+    await pdfFromPages(
+        pages,
+        fname,
+        (i, n) => { btn.textContent = `${Math.round((i + 1) / n * 100)}%`; },
+        () => {
+            document.body.removeChild(host);
+            btn.disabled = false;
+            btn.textContent = 'Зберегти';
+            dCloseModal();
+        }
+    );
+}
+
+/* ══ MOBILE ═════════════════════════════════════════ */
+let mCurTab  = 0;
+let mSorting = false;
+let mX0 = 0, mXcur = 0, mXprev = 0;
+
+function mInit() {
+    if (!S.date) {
+        const t = new Date();
+        const y = t.getFullYear();
+        const m = String(t.getMonth()+1).padStart(2,'0');
+        const d = String(t.getDate()).padStart(2,'0');
+        S.date = `${y}-${m}-${d}`;
+        calUpdateTriggers();
+    }
+    mRenderGroups();
+    mUpdateSignRoleUI();
+    calUpdateTriggers();
+    const sl = document.getElementById('m-slider');
+    sl.addEventListener('touchstart', mTS, { passive: true });
+    sl.addEventListener('touchmove',  mTM, { passive: false });
+    sl.addEventListener('touchend',   mTE);
+}
+
+function mResize(el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
+
+function mSave() {
+    S.type    = csGetValue('m-type-select');
+    S.address = document.getElementById('m-address').value;
+    const pibEl = document.getElementById('m-pib');
+    S.pib = pibEl ? pibEl.value : '';
+}
+
+function mRenderGroups() {
+    document.getElementById('m-groups').innerHTML = S.groups.map((g, gi) => `
+        <div class="m-card">
+            <div class="m-card-hdr">
+                <textarea class="m-card-title"
+                          oninput="S.groups[${gi}].title=this.value;mResize(this)"
+                          placeholder="Назва категорії...">${g.title}</textarea>
+                <button style="border:none;background:none;font-size:10px;color:#94a3b8;"
+                        onclick="S.groups.splice(${gi},1);mRenderGroups()">ВИДАЛИТИ</button>
+            </div>
+            <div class="m-add-btn" id="madd${gi}" onclick="document.getElementById('mf${gi}').click()">ДОДАТИ ФОТО</div>
+            <div class="m-load-bar-wrap" id="mlbw${gi}"><div class="m-load-bar" id="mlb${gi}"></div></div>
+            <div class="m-load-count" id="mlc${gi}"></div>
+            <input type="file" id="mf${gi}" multiple hidden accept="image/*"
+                   onchange="(function(fl,g){var arr=[];for(var i=0;i<fl.length;i++)arr.push(fl[i]);processFiles(arr,g,mRenderGroups);})(this.files,${gi})">
+            <div class="m-photo-grid" data-gi="${gi}" id="mpg${gi}">
+                ${g.photos.map((p, pi) => `
+                    <div class="m-photo-item" data-gi="${gi}" data-pi="${pi}"
+                         onclick="photoPopupOpen(event,${gi},${pi})">
+                        <img src="${typeof p === 'string' ? p : p.src}"
+                             style="transform:rotate(${typeof p === 'string' ? 0 : (p.rotation || 0)}deg);width:100%;height:100%;object-fit:contain;">
+                    </div>`).join('')}
+            </div>
+        </div>`).join('');
+    document.querySelectorAll('.m-card-title').forEach(mResize);
+    mInitSortable();
+}
+
+function mInitSortable() {
+    S.groups.forEach((_, gi) => {
+        const grid = document.getElementById(`mpg${gi}`);
+        if (!grid) return;
+        new Sortable(grid, {
+            group: 'photos',
+            animation: 150,
+            filter: '.m-del',
+            delay: 150,
+            delayOnTouchOnly: true,
+            ghostClass: 'sortable-ghost',
+            onStart: () => { mSorting = true; },
+            onEnd: evt => {
+                const fromGi = parseInt(evt.from.dataset.gi);
+                const toGi   = parseInt(evt.to.dataset.gi);
+                const mv = S.groups[fromGi].photos.splice(evt.oldIndex, 1)[0];
+                S.groups[toGi].photos.splice(evt.newIndex, 0, mv);
+                mSorting = false;
+                mRenderGroups();
+            }
+        });
+    });
+}
+
+function mRenderPreview() {
+    const area = document.getElementById('m-preview');
+    area.innerHTML = '';
+    const photos = getPhotos();
+    const n = Math.ceil(photos.length / 2) || 1;
+    for (let i = 0; i < n; i++) area.appendChild(buildA4(i, photos, n));
+
+    // Масштаб: A4 (794px) → ширина екрану з 16px відступами з кожного боку
+    const scale   = (window.innerWidth - 32) / 794;
+    const wrapper = document.getElementById('m-a4-wrap');
+
+    // DOM-висота всього вмісту (до scale)
+    const pageH = 1123;
+    const gap   = 20;
+    const domH  = n * pageH + (n - 1) * gap;
+
+    // Візуальна висота після scale (скільки пікселів екрану займає вміст)
+    const scaledH = domH * scale;
+
+    // Застосовуємо масштаб через wrapper
+    wrapper.style.transform       = `scale(${scale})`;
+    wrapper.style.transformOrigin = 'top center';
+    wrapper.style.height          = domH + 'px';
+    // Від'ємний margin компенсує "зайвий" DOM-простір після scale
+    wrapper.style.marginBottom    = -(domH - scaledH) + 'px';
+
+    // Стоп-елемент: нижній край сторінки заходить під навбар приблизно на половину.
+    // Навбар: bottom:24px + height:64px = верх навбару на (viewH - 88px) від верху.
+    // Хочемо щоб нижній край сторінки зупинився на (viewH - 24px) — тобто на рівні
+    // нижньої половини навбару (24px = bottom offset навбару).
+    const viewH  = window.innerHeight;
+    const stopH  = Math.max(0, viewH - scaledH - 24 - 16);
+    const stop   = document.getElementById('m-scroll-stop');
+    stop.style.cssText = `height:${stopH}px;flex-shrink:0;pointer-events:none;`;
+}
+
+async function mGenPDF() {
+    const photos = getPhotos();
+    if (!photos.length) { alert('Додайте фото'); return; }
+
+    const btn   = document.getElementById('m-pdf-btn');
+    const fname = document.getElementById('m-fname').value || 'Фототаблиця';
+    btn.style.pointerEvents = 'none';
+
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;left:-9999px;top:0;z-index:-1;';
+    const n = Math.ceil(photos.length / 2);
+    for (let i = 0; i < n; i++) {
+        const pg = buildA4(i, photos, n);
+        pg.style.width     = '794px';
+        pg.style.height    = '1123px';
+        host.appendChild(pg);
+    }
+    document.body.appendChild(host);
+    await new Promise(r => setTimeout(r, 250));
+
+    const pages = Array.from(host.querySelectorAll('.a4-page'));
+    await pdfFromPages(pages, fname,
+        (i, n) => { btn.textContent = `${Math.round(i / n * 100)}%`; },
+        () => {
+            document.body.removeChild(host);
+            btn.textContent = 'PDF';
+            btn.style.pointerEvents = 'auto';
+        }
+    );
+}
+
+function mOpenSheet()  { document.getElementById('m-sheet').classList.add('open'); }
+function mCloseSheet() { document.getElementById('m-sheet').classList.remove('open'); }
+
+function mTab(idx) {
+    mCurTab = idx;
+    mXprev  = -idx * window.innerWidth;
+    const sl = document.getElementById('m-slider');
+    sl.style.transition = 'transform .3s ease-out';
+    sl.style.transform  = `translateX(${mXprev}px)`;
+    document.getElementById('m-nav0').classList.toggle('active', idx === 0);
+    document.getElementById('m-nav1').classList.toggle('active', idx === 1);
+    const btn = document.getElementById('m-pdf-btn');
+    if (idx === 1) {
+        mSave(); mRenderPreview();
+        btn.style.opacity = '1'; btn.style.transform = 'scale(1)'; btn.style.pointerEvents = 'auto';
+    } else {
+        btn.style.opacity = '0'; btn.style.transform = 'scale(.5)'; btn.style.pointerEvents = 'none';
+    }
+}
+
+function mTS(e) {
+    if (mSorting) return;
+    mX0 = e.touches[0].clientX;
+    window._mStartY = e.touches[0].clientY;
+    document.getElementById('m-slider').style.transition = 'none';
+}
+function mTM(e) {
+    if (mSorting) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - mX0;
+    const dy = Math.abs(touch.clientY - (window._mStartY || touch.clientY));
+    if (dy > Math.abs(dx)) return;
+    if ((mCurTab === 0 && dx < 0) || (mCurTab === 1 && dx > 0)) {
+        mXcur = mXprev + dx;
+        document.getElementById('m-slider').style.transform = `translateX(${mXcur}px)`;
+        e.preventDefault();
+    }
+}
+function mTE(e) {
+    if (mSorting) return;
+    const dx = e.changedTouches[0].clientX - mX0;
+    if (Math.abs(dx) > 80) mTab(dx < 0 ? Math.min(mCurTab + 1, 1) : Math.max(mCurTab - 1, 0));
+    else mTab(mCurTab);
+}
+
+/* ══ CROP ═══════════════════════════════════════════
+   cropOpen(gi, pi) — відкриває модалку кадрування
+   Підтримує:
+     • перетягування/ресайз рамки
+     • слайдер вирівнювання горизонту (-45°…+45°)
+   Після «Застосувати» зберігає обрізане+повернуте зображення
+════════════════════════════════════════════════════ */
+let _crop = {
+    gi: 0, pi: 0,
+    img: null,
+    angle: 0,          // кут повороту в градусах
+    // координати рамки у px відносно canvas-елементу
+    bx: 0, by: 0, bw: 0, bh: 0,
+    // нормалізовані координати рамки у просторі оригінального зображення (0..1)
+    // зберігаються при кожній зміні рамки і використовуються для відновлення при зміні кута
+    normBx: -1, normBy: -1, normBw: -1, normBh: -1,
+    // розміри canvas-елементу і offset у wrap
+    cw: 0, ch: 0, ox: 0, oy: 0,
+    // масштаб для відображення
+    dispScale: 1,
+    drag: null,
+};
+
+function cropOpen(gi, pi) {
+    _crop.gi = gi;
+    _crop.pi = pi;
+    _crop.angle = 0;
+    _crop.normBx = -1; _crop.normBy = -1; _crop.normBw = -1; _crop.normBh = -1;
+
+    const p = S.groups[gi].photos[pi];
+    const src = typeof p === 'string' ? p : p.src;
+
+    document.getElementById('crop-overlay').classList.add('open');
+    // скидаємо слайдер
+    const sl = document.getElementById('crop-rotate-slider');
+    sl.value = 0;
+    document.getElementById('crop-angle-val').textContent = '0.0°';
+
+    const img = new Image();
+    img.onload = () => { _crop.img = img; _cropLayout(); };
+    img.src = src;
+}
+
+/* ── Розміщення canvas у контейнері ── */
+function _cropLayout() {
+    const wrap   = document.getElementById('crop-canvas-wrap');
+    const canvas = document.getElementById('crop-canvas');
+    const img    = _crop.img;
+    const angle  = _crop.angle * Math.PI / 180;
+
+    // Розмір зображення після повороту
+    const aw = Math.abs(img.naturalWidth  * Math.cos(angle)) + Math.abs(img.naturalHeight * Math.sin(angle));
+    const ah = Math.abs(img.naturalWidth  * Math.sin(angle)) + Math.abs(img.naturalHeight * Math.cos(angle));
+
+    const maxW = wrap.clientWidth  || window.innerWidth;
+    const maxH = wrap.clientHeight || (window.innerHeight - 180);
+
+    const dispScale = Math.min(maxW / aw, maxH / ah, 1);
+    const cw = Math.round(aw * dispScale);
+    const ch = Math.round(ah * dispScale);
+
+    canvas.width  = cw;
+    canvas.height = ch;
+    _crop.cw = cw; _crop.ch = ch; _crop.dispScale = dispScale;
+    const isFirstInit = (_crop.normBw < 0);
+
+    // Вписаний прямокутник (largest axis-aligned rect inside rotated image) у canvas-координатах
+    const imgW = img.naturalWidth  * dispScale;
+    const imgH = img.naturalHeight * dispScale;
+    const cosA = Math.abs(Math.cos(angle));
+    const sinA = Math.abs(Math.sin(angle));
+    let ix, iy, iw, ih;
+    if (Math.abs(cosA - sinA) < 0.001 || _crop.angle === 0) {
+        ix = 0; iy = 0; iw = cw; ih = ch;
+    } else {
+        const maxInW = (imgW * cosA - imgH * sinA) / (cosA * cosA - sinA * sinA);
+        const maxInH = (imgH * cosA - imgW * sinA) / (cosA * cosA - sinA * sinA);
+        iw = Math.max(20, Math.min(Math.round(maxInW), cw));
+        ih = Math.max(20, Math.min(Math.round(maxInH), ch));
+        ix = Math.round((cw - iw) / 2);
+        iy = Math.round((ch - ih) / 2);
+    }
+    _crop.ix = ix; _crop.iy = iy; _crop.iw = iw; _crop.ih = ih;
+
+    _cropDraw();
+
+    if (isFirstInit) {
+        // Перша ініціалізація: рамка = весь вписаний прямокутник фото
+        _crop.bx = ix; _crop.by = iy;
+        _crop.bw = iw; _crop.bh = ih;
+        // Зберігаємо нормалізовані координати (весь оригінал)
+        _crop.normBx = 0; _crop.normBy = 0;
+        _crop.normBw = img.naturalWidth; _crop.normBh = img.naturalHeight;
+    } else {
+        // Відновлюємо рамку з нормалізованих координат пропорційно до поточного вписаного прямокутника
+        const scaleX = iw / img.naturalWidth;
+        const scaleY = ih / img.naturalHeight;
+        _crop.bw = Math.round(_crop.normBw * scaleX);
+        _crop.bh = Math.round(_crop.normBh * scaleY);
+        _crop.bx = Math.round(ix + _crop.normBx * scaleX);
+        _crop.by = Math.round(iy + _crop.normBy * scaleY);
+        _cropClamp();
+    }
+
+    // offset canvas у wrap (після малювання)
+    requestAnimationFrame(() => {
+        const cr = canvas.getBoundingClientRect();
+        const wr = wrap.getBoundingClientRect();
+        _crop.ox = cr.left - wr.left;
+        _crop.oy = cr.top  - wr.top;
+        _cropUpdateBox();
+    });
+}
+
+/* ── Зберегти нормалізовані координати рамки (викликати після кожної зміни рамки) ── */
+function _cropSaveNorm() {
+    const { ix, iy, iw, ih, bx, by, bw, bh, img } = _crop;
+    if (!img || iw <= 0 || ih <= 0) return;
+    const scaleX = img.naturalWidth  / iw;
+    const scaleY = img.naturalHeight / ih;
+    _crop.normBx = (bx - ix) * scaleX;
+    _crop.normBy = (by - iy) * scaleY;
+    _crop.normBw = bw * scaleX;
+    _crop.normBh = bh * scaleY;
+}
+
+/* ── Малює зображення на canvas з поточним кутом ── */
+function _cropDraw() {
+    const canvas = document.getElementById('crop-canvas');
+    const ctx    = canvas.getContext('2d');
+    const img    = _crop.img;
+    const angle  = _crop.angle * Math.PI / 180;
+    const { cw, ch, dispScale } = _crop;
+
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.save();
+    ctx.translate(cw / 2, ch / 2);
+    ctx.rotate(angle);
+    ctx.drawImage(img,
+        -img.naturalWidth  * dispScale / 2,
+        -img.naturalHeight * dispScale / 2,
+        img.naturalWidth  * dispScale,
+        img.naturalHeight * dispScale
+    );
+    ctx.restore();
+}
+
+/* ── Оновлення видимого положення рамки ── */
+function _cropUpdateBox() {
+    const box = document.getElementById('crop-box');
+    const { bx, by, bw, bh, ox, oy } = _crop;
+    box.style.left   = (ox + bx) + 'px';
+    box.style.top    = (oy + by) + 'px';
+    box.style.width  = bw + 'px';
+    box.style.height = bh + 'px';
+}
+
+/* Перевіряє чи точка (px, py) у canvas-координатах лежить всередині повернутого зображення */
+function _cropPointInsideImage(px, py) {
+    const { img, cw, ch, dispScale, angle } = _crop;
+    const rad = angle * Math.PI / 180;
+    // Переводимо точку у систему координат зображення (відносно центру canvas)
+    const dx = px - cw / 2;
+    const dy = py - ch / 2;
+    // Повертаємо у зворотньому напрямку
+    const cosA = Math.cos(-rad);
+    const sinA = Math.sin(-rad);
+    const lx = dx * cosA - dy * sinA;
+    const ly = dx * sinA + dy * cosA;
+    // Межі зображення у власних координатах (центровано в 0)
+    const hw = img.naturalWidth  * dispScale / 2;
+    const hh = img.naturalHeight * dispScale / 2;
+    return lx >= -hw && lx <= hw && ly >= -hh && ly <= hh;
+}
+
+/* Повертає максимальний axis-aligned rect що повністю лежить всередині повернутого зображення
+   і включає задану точку (cx, cy) як центр (або якнайближче до неї) */
+function _cropClamp() {
+    const { cw, ch, img, dispScale, angle } = _crop;
+    const minSize = 20;
+
+    // Мінімальний розмір
+    if (_crop.bw < minSize) _crop.bw = minSize;
+    if (_crop.bh < minSize) _crop.bh = minSize;
+
+    // При куті 0 — простий clamp по canvas
+    if (_crop.angle === 0) {
+        if (_crop.bw > cw) _crop.bw = cw;
+        if (_crop.bh > ch) _crop.bh = ch;
+        if (_crop.bx < 0) _crop.bx = 0;
+        if (_crop.by < 0) _crop.by = 0;
+        if (_crop.bx + _crop.bw > cw) _crop.bx = cw - _crop.bw;
+        if (_crop.by + _crop.bh > ch) _crop.by = ch - _crop.bh;
+        return;
+    }
+
+    // При ненульовому куті: перевіряємо всі 4 кути рамки
+    // Якщо кут виходить за межі повернутого фото — стискаємо рамку/зміщуємо
+    // Підхід: бінарний пошук максимального розміру що вміщується,
+    // але для простоти — обмежуємо по вписаному прямокутнику як мінімум,
+    // і дозволяємо виходити до реального краю фото де всі 4 кути всередині
+
+    // Перевіряємо чи всі 4 кути рамки всередині повернутого фото
+    const { bx, by, bw, bh } = _crop;
+    const corners = [
+        [bx,      by     ],
+        [bx + bw, by     ],
+        [bx,      by + bh],
+        [bx + bw, by + bh],
+    ];
+
+    const allInside = corners.every(([px, py]) => _cropPointInsideImage(px, py));
+    if (allInside) return; // все ок
+
+    // Інакше — відкочуємось до вписаного прямокутника (безпечна зона)
+    const ix = (_crop.ix !== undefined) ? _crop.ix : 0;
+    const iy = (_crop.iy !== undefined) ? _crop.iy : 0;
+    const iw = (_crop.iw !== undefined) ? _crop.iw : cw;
+    const ih = (_crop.ih !== undefined) ? _crop.ih : ch;
+
+    if (_crop.bw > iw) _crop.bw = iw;
+    if (_crop.bh > ih) _crop.bh = ih;
+    if (_crop.bx < ix) _crop.bx = ix;
+    if (_crop.by < iy) _crop.by = iy;
+    if (_crop.bx + _crop.bw > ix + iw) _crop.bx = ix + iw - _crop.bw;
+    if (_crop.by + _crop.bh > iy + ih) _crop.by = iy + ih - _crop.bh;
+}
+
+/* ── Слайдер кута ── */
+function _cropOnAngle(val) {
+    _crop.angle = parseFloat(val);
+    document.getElementById('crop-rotate-slider').value = _crop.angle;
+    document.getElementById('crop-angle-val').textContent = _crop.angle.toFixed(1) + '°';
+    _cropLayout();
+}
+
+/* ── Pointer events ── */
+function _cropPointerDown(e, type) {
+    e.preventDefault();
+    const pt = e.touches ? e.touches[0] : e;
+    _crop.drag = {
+        type,
+        startX: pt.clientX, startY: pt.clientY,
+        startBx: _crop.bx, startBy: _crop.by,
+        startBw: _crop.bw, startBh: _crop.bh,
+    };
+}
+
+function _cropPointerMove(e) {
+    if (!_crop.drag) return;
+    e.preventDefault();
+    const pt = e.touches ? e.touches[0] : e;
+    const dx = pt.clientX - _crop.drag.startX;
+    const dy = pt.clientY - _crop.drag.startY;
+    const d  = _crop.drag;
+
+    if (d.type === 'move') {
+        _crop.bx = d.startBx + dx;
+        _crop.by = d.startBy + dy;
+    } else {
+        let { startBx: bx, startBy: by, startBw: bw, startBh: bh } = d;
+        if (d.type === 'tl') { bx += dx; bw -= dx; by += dy; bh -= dy; }
+        else if (d.type === 'tr') { bw += dx; by += dy; bh -= dy; }
+        else if (d.type === 'bl') { bx += dx; bw -= dx; bh += dy; }
+        else if (d.type === 'br') { bw += dx; bh += dy; }
+        else if (d.type === 'tm') { by += dy; bh -= dy; }
+        else if (d.type === 'bm') { bh += dy; }
+        else if (d.type === 'ml') { bx += dx; bw -= dx; }
+        else if (d.type === 'mr') { bw += dx; }
+        _crop.bx = bx; _crop.by = by; _crop.bw = bw; _crop.bh = bh;
+    }
+    _cropClamp();
+    _cropSaveNorm();
+    _cropUpdateBox();
+}
+
+function _cropPointerUp() { _crop.drag = null; }
+
+/* ── Застосувати: поворот + кадрування на оригінальному розмірі ── */
+function cropApply() {
+    const { img, bx, by, bw, bh, dispScale, angle } = _crop;
+    const rad = angle * Math.PI / 180;
+
+    // 1. Повертаємо оригінал на окремому canvas
+    const aw = Math.abs(img.naturalWidth  * Math.cos(rad)) + Math.abs(img.naturalHeight * Math.sin(rad));
+    const ah = Math.abs(img.naturalWidth  * Math.sin(rad)) + Math.abs(img.naturalHeight * Math.cos(rad));
+
+    const rotC = document.createElement('canvas');
+    rotC.width  = Math.round(aw);
+    rotC.height = Math.round(ah);
+    const rCtx = rotC.getContext('2d');
+    rCtx.translate(aw / 2, ah / 2);
+    rCtx.rotate(rad);
+    rCtx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+
+    // 2. Кадруємо — перераховуємо координати рамки у простір повернутого оригіналу
+    const sx = bx / dispScale;
+    const sy = by / dispScale;
+    const sw = bw / dispScale;
+    const sh = bh / dispScale;
+
+    const out = document.createElement('canvas');
+    out.width  = Math.round(sw);
+    out.height = Math.round(sh);
+    out.getContext('2d').drawImage(rotC, sx, sy, sw, sh, 0, 0, out.width, out.height);
+
+    const dataUrl = out.toDataURL('image/jpeg', 0.92);
+    const { gi, pi } = _crop;
+    const old = S.groups[gi].photos[pi];
+    S.groups[gi].photos[pi] = {
+        src: dataUrl,
+        rotation: typeof old === 'string' ? 0 : (old.rotation || 0),
+    };
+
+    cropClose();
+    IS_MOBILE ? mRenderGroups() : (dRenderEditor(), dRenderPreview());
+}
+
+function cropClose() {
+    const overlay = document.getElementById('crop-overlay');
+    overlay.classList.remove('open');
+    // Очищаємо стан після завершення анімації
+    setTimeout(() => {
+        _crop.img = null; _crop.drag = null;
+        _crop.bx = 0; _crop.by = 0; _crop.bw = 0; _crop.bh = 0;
+        _crop.normBx = -1; _crop.normBy = -1; _crop.normBw = -1; _crop.normBh = -1;
+        _crop.angle = 0;
+        _crop.ix = undefined; _crop.iy = undefined; _crop.iw = undefined; _crop.ih = undefined;
+        const c = document.getElementById('crop-canvas');
+        if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height);
+    }, 300);
+}
+
+/* ══ PHOTO ACTION POPUP ══════════════════════════════ */
+const _pp = { gi: -1, pi: -1, el: null, skipClose: false };
+
+function photoPopupOpen(e, gi, pi) {
+    e.preventDefault();
+    e.stopPropagation();
+    const item = e.currentTarget;
+    const popup = document.getElementById('photo-popup');
+
+    if (_pp.el === item && popup.classList.contains('open')) {
+        photoPopupClose();
+        return;
+    }
+
+    _pp.gi = gi;
+    _pp.pi = pi;
+    _pp.el = item;
+    _pp.skipClose = false;
+
+    const grid = item.closest('.d-photo-grid, .m-photo-grid');
+    if (grid) {
+        grid.querySelectorAll('.d-photo-item, .m-photo-item').forEach(el => el.classList.remove('active'));
+        grid.classList.add('has-active');
+        item.classList.add('active');
+    }
+
+    popup.style.visibility = 'hidden';
+    popup.style.left = '-9999px';
+    popup.style.top  = '-9999px';
+    popup.classList.add('open');
+
+    requestAnimationFrame(() => {
+        const rect = item.getBoundingClientRect();
+        const pw   = popup.offsetWidth  || 220;
+        const ph   = popup.offsetHeight || 165;
+        const m    = 10;
+        const vw   = window.innerWidth;
+        const vh   = window.innerHeight;
+
+        let left, top;
+
+        top = rect.top + rect.height / 2 - ph / 2;
+        top = Math.max(m, Math.min(vh - ph - m, top));
+
+        if (rect.right + m + pw <= vw) {
+            left = rect.right + m;
+        } else if (rect.left - m - pw >= 0) {
+            left = rect.left - m - pw;
+        } else {
+            left = Math.max(m, Math.min(vw - pw - m, vw / 2 - pw / 2));
+            if (rect.bottom + m + ph <= vh) {
+                top = rect.bottom + m;
+            } else if (rect.top - m - ph >= 0) {
+                top = rect.top - m - ph;
+            } else {
+                top = Math.max(m, vh - ph - m);
+            }
+        }
+
+        popup.style.left = left + 'px';
+        popup.style.top  = top  + 'px';
+        popup.style.visibility = '';
+    });
+}
+
+function photoPopupClose() {
+    const popup = document.getElementById('photo-popup');
+    popup.classList.remove('open');
+    document.querySelectorAll('.d-photo-grid.has-active, .m-photo-grid.has-active').forEach(g => {
+        g.classList.remove('has-active');
+        g.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
+    });
+    _pp.gi = -1; _pp.pi = -1; _pp.el = null; _pp.skipClose = false;
+}
+
+document.addEventListener('click', function(e) {
+    if (!document.getElementById('photo-popup').classList.contains('open')) return;
+    if (_pp.skipClose) { _pp.skipClose = false; return; }
+    if (e.target.closest('#photo-popup')) return;
+    if (e.target.closest('.d-photo-item') || e.target.closest('.m-photo-item')) return;
+    photoPopupClose();
+});
+document.addEventListener('touchend', function(e) {
+    if (!document.getElementById('photo-popup').classList.contains('open')) return;
+    if (_pp.skipClose) { _pp.skipClose = false; return; }
+    if (e.target.closest('#photo-popup')) return;
+    if (e.target.closest('.m-photo-item')) return;
+    photoPopupClose();
+}, { passive: true });
+
+document.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+});
+
+function _ppBind(id, fn) {
+    const btn = document.getElementById(id);
+    btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const gi = _pp.gi, pi = _pp.pi;
+        if (gi < 0) return;
+        photoPopupClose();
+        fn(gi, pi);
+    });
+    btn.addEventListener('touchend', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const gi = _pp.gi, pi = _pp.pi;
+        if (gi < 0) return;
+        _pp.skipClose = true;
+        photoPopupClose();
+        fn(gi, pi);
+    });
+}
+
+/* ── Ініціалізація обробників crop і popup ── */
+window.addEventListener('load', () => {
+    // Прив'язуємо кнопки popup після завантаження DOM
+
+    /* ── Допоміжна функція: малює зображення повернутим на canvas ── */
+    function rotateImageSrc(src, degrees) {
+        return new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => {
+                const rad = degrees * Math.PI / 180;
+                const sin = Math.abs(Math.sin(rad));
+                const cos = Math.abs(Math.cos(rad));
+                const w = Math.round(img.width * cos + img.height * sin);
+                const h = Math.round(img.width * sin + img.height * cos);
+                const c = document.createElement('canvas');
+                c.width = w; c.height = h;
+                const ctx = c.getContext('2d');
+                ctx.translate(w / 2, h / 2);
+                ctx.rotate(rad);
+                ctx.drawImage(img, -img.width / 2, -img.height / 2);
+                resolve(c.toDataURL('image/jpeg', 0.92));
+            };
+            img.onerror = () => resolve(src);
+            img.src = src;
+        });
+    }
+
+    async function applyRotation(gi, pi, addDeg) {
+        let p = S.groups[gi].photos[pi];
+        const src = typeof p === 'string' ? p : p.src;
+        const newSrc = await rotateImageSrc(src, addDeg);
+        if (typeof p === 'string') {
+            S.groups[gi].photos[pi] = { src: newSrc, rotation: 0 };
+        } else {
+            p.src = newSrc;
+            p.rotation = 0;
+        }
+        IS_MOBILE ? mRenderGroups() : (dRenderEditor(), dRenderPreview());
+    }
+
+    _ppBind('pp-crop', function(gi, pi) {
+        cropOpen(gi, pi);
+    });
+    _ppBind('pp-rotate-cw', function(gi, pi) {
+        applyRotation(gi, pi, 90);
+    });
+    _ppBind('pp-rotate-ccw', function(gi, pi) {
+        applyRotation(gi, pi, 270);
+    });
+    _ppBind('pp-rotate-180', function(gi, pi) {
+        applyRotation(gi, pi, 180);
+    });
+    _ppBind('pp-delete', function(gi, pi) {
+        S.groups[gi].photos.splice(pi, 1);
+        IS_MOBILE ? mRenderGroups() : (dRenderEditor(), dRenderPreview());
+    });
+
+    const wrap = document.getElementById('crop-canvas-wrap');
+    const box  = document.getElementById('crop-box');
+
+    box.addEventListener('mousedown',  e => _cropPointerDown(e, 'move'));
+    box.addEventListener('touchstart', e => _cropPointerDown(e, 'move'), { passive: false });
+
+    wrap.querySelectorAll('.crop-handle').forEach(h => {
+        const t = h.dataset.handle;
+        h.addEventListener('mousedown',  e => { e.stopPropagation(); _cropPointerDown(e, t); });
+        h.addEventListener('touchstart', e => { e.stopPropagation(); _cropPointerDown(e, t); }, { passive: false });
+    });
+
+    window.addEventListener('mousemove', _cropPointerMove);
+    window.addEventListener('touchmove',  _cropPointerMove, { passive: false });
+    window.addEventListener('mouseup',   _cropPointerUp);
+    window.addEventListener('touchend',   _cropPointerUp);
+
+    window.addEventListener('resize', () => { if (_crop.img) _cropLayout(); });
+});
+
+/* ══ CUSTOM SELECT ══════════════════════════════════ */
+function csGetValue(id) {
+    var opt = document.querySelector('#' + id + ' .c-select-option.selected');
+    return opt ? opt.getAttribute('data-value') : '';
+}
+function csToggle(id) {
+    var wrap = document.getElementById(id);
+    var isOpen = wrap.classList.contains('open');
+    document.querySelectorAll('.c-select.open').forEach(function(el) {
+        el.classList.remove('open');
+    });
+    if (!isOpen) { wrap.classList.add('open'); }
+}
+function csSelect(id, optEl) {
+    var wrap = document.getElementById(id);
+    wrap.querySelectorAll('.c-select-option').forEach(function(o) {
+        o.classList.remove('selected');
+    });
+    optEl.classList.add('selected');
+    wrap.querySelector('.c-select-label').textContent =
+        optEl.firstChild.textContent.trim();
+    wrap.classList.remove('open');
+    if (id === 'd-type-select') { dUpdate(); }
+    if (id === 'm-type-select') { mSave(); }
+}
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.c-select')) {
+        document.querySelectorAll('.c-select.open').forEach(function(el) {
+            el.classList.remove('open');
+        });
+    }
+});
+</script>
+
+<!-- ═══════════════════════════════════════════
+     PHOTO ACTION POPUP
+═══════════════════════════════════════════ -->
+<div id="photo-popup">
+    <button class="pp-btn" id="pp-crop">
+        <span class="pp-icon mono">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M4 1v9a2 2 0 002 2h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                <path d="M1 4h9a2 2 0 012 2v9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+        </span>
+        Кадрувати
+    </button>
+    <div class="pp-rotate-row">
+        <!-- CCW −90° -->
+        <button class="pp-rot-btn" id="pp-rotate-ccw" title="Повернути проти годинникової стрілки (−90°)">
+            <span class="pp-icon mono">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24">
+                    <path fill="currentColor" d="M12 3a9 9 0 0 0-9 9a9 9 0 0 0 4.873 8.001L6 20a1 1 0 0 0-.117 1.993L6 22h4a1 1 0 0 0 .993-.883L11 21v-4a1 1 0 0 0-1.993-.117L9 17l-.001 1.327A7.01 7.01 0 0 1 5 12a7 7 0 0 1 14 0a1 1 0 1 0 2 0a9 9 0 0 0-9-9m0 6a3 3 0 1 0 0 6a3 3 0 0 0 0-6m0 2a1 1 0 1 1 0 2a1 1 0 0 1 0-2"/>
+                </svg>
+            </span>
+        </button>
+        <div class="pp-rot-divider"></div>
+        <!-- CW +90° -->
+        <button class="pp-rot-btn" id="pp-rotate-cw" title="Повернути за годинниковою стрілкою (+90°)">
+            <span class="pp-icon mono">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24">
+                    <path fill="currentColor" d="M12 3a9 9 0 0 1 4.977 16.5h1.773a.75.75 0 0 1 .102 1.493L18.75 21h-4a.75.75 0 0 1-.743-.648L14 20.25v-4a.75.75 0 0 1 1.493-.102l.007.102l.001 2.385A7.501 7.501 0 0 0 12 4.5A7.5 7.5 0 0 0 4.5 12A.75.75 0 0 1 3 12a9 9 0 0 1 9-9m0 6.25a2.75 2.75 0 1 1 0 5.5a2.75 2.75 0 0 1 0-5.5m0 1.5a1.25 1.25 0 1 0 0 2.5a1.25 1.25 0 0 0 0-2.5"/>
+                </svg>
+            </span>
+        </button>
+        <div class="pp-rot-divider"></div>
+        <!-- 180° -->
+        <button class="pp-rot-btn" id="pp-rotate-180" title="Повернути на 180°">
+            <span class="pp-icon mono">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24">
+                    <path fill="currentColor" d="M4.702 7.636A8.5 8.5 0 0 1 11.999 3.5a8.48 8.48 0 0 1 6.481 3h-1.73a.75.75 0 0 0 0 1.5h3.5a.75.75 0 0 0 .75-.75v-3.5a.75.75 0 0 0-1.5 0v1.636A9.98 9.98 0 0 0 11.999 2a10 10 0 0 0-8.584 4.865a.75.75 0 0 0 1.287.771M4.5 18.616v1.634a.75.75 0 0 1-1.5 0v-3.5a.75.75 0 0 1 .75-.75h3.5a.75.75 0 0 1 0 1.5H5.517a8.48 8.48 0 0 0 6.482 3a8.5 8.5 0 0 0 7.296-4.136a.75.75 0 1 1 1.287.771A10 10 0 0 1 11.999 22A9.98 9.98 0 0 1 4.5 18.617m5-11.866a.75.75 0 0 0-1.5 0V8H6.75a.75.75 0 0 0 0 1.5H8v3.75A2.75 2.75 0 0 0 10.75 16h3.75v1.25a.75.75 0 0 0 1.5 0V16h1.25a.75.75 0 0 0 0-1.5h-6.5c-.69 0-1.25-.56-1.25-1.25zm5 4v2.75H16v-2.75A2.75 2.75 0 0 0 13.25 8H10.5v1.5h2.75c.69 0 1.25.56 1.25 1.25"/>
+                </svg>
+            </span>
+        </button>
+    </div>
+    <div class="pp-divider"></div>
+    <button class="pp-btn danger" id="pp-delete">
+        <span class="pp-icon red">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M3 6h18M8 6V4h8v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </span>
+        Видалити
+    </button>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     CROP MODAL
+═══════════════════════════════════════════ -->
+<div id="crop-overlay">
+    <div id="crop-toolbar">
+        <button id="crop-cancel-btn" onclick="cropClose()">Скасувати</button>
+        <span>Кадрування та вирівнювання</span>
+        <button id="crop-apply-btn" onclick="cropApply()">Застосувати</button>
+    </div>
+    <div id="crop-canvas-wrap">
+        <canvas id="crop-canvas"></canvas>
+        <div id="crop-box">
+            <div class="crop-handle tl" data-handle="tl"></div>
+            <div class="crop-handle tm" data-handle="tm"></div>
+            <div class="crop-handle tr" data-handle="tr"></div>
+            <div class="crop-handle ml" data-handle="ml"></div>
+            <div class="crop-handle mr" data-handle="mr"></div>
+            <div class="crop-handle bl" data-handle="bl"></div>
+            <div class="crop-handle bm" data-handle="bm"></div>
+            <div class="crop-handle br" data-handle="br"></div>
+        </div>
+    </div>
+    <div id="crop-rotate-panel">
+        <div id="crop-rotate-row">
+            <span id="crop-rotate-label">Горизонт</span>
+            <input type="range" id="crop-rotate-slider"
+                   min="-45" max="45" step="0.1" value="0"
+                   oninput="_cropOnAngle(this.value)">
+            <span id="crop-angle-val">0.0°</span>
+            <button id="crop-reset-angle" onclick="_cropOnAngle(0)">↺ 0°</button>
+        </div>
+    </div>
+</div>
+</body>
+</html>
